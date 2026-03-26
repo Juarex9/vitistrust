@@ -729,6 +729,15 @@ footer {
   50% { opacity: 0.5; }
 }
 
+.leaflet-container {
+  background: var(--bg-card) !important;
+}
+
+.map-container-wrapper {
+  position: relative;
+  z-index: 10;
+}
+
 @media (max-width: 1200px) {
   .dashboard-grid {
     grid-template-columns: 1fr 1fr;
@@ -770,5 +779,4 @@ footer {
     flex-wrap: wrap;
     gap: 1rem;
   }
-}
 }

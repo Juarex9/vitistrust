@@ -1,6 +1,17 @@
 import { useState, useEffect } from 'react'
 import { ethers } from 'ethers'
+import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet'
+import 'leaflet/dist/leaflet.css'
+import L from 'leaflet'
 import './index.css'
+
+// Fix for default marker icon in Leaflet + React
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
 
 const RSK_TESTNET_CHAIN_ID = '0x1f'
 
@@ -25,6 +36,9 @@ const translations = {
       risk: 'Risk Level',
       hedera: 'Hedera Topic',
       tx: 'RSK TX',
+      justification: 'Executive Summary',
+      analysis: 'Detailed Metric Analysis',
+      recommendations: 'Recommendations',
       loading: 'Verifying...',
       error: 'Verification Failed'
     },
@@ -69,6 +83,9 @@ const translations = {
       risk: 'Nivel de Riesgo',
       hedera: 'Tópico Hedera',
       tx: 'TX RSK',
+      justification: 'Resumen Ejecutivo',
+      analysis: 'Análisis Detallado de Métricas',
+      recommendations: 'Recomendaciones',
       loading: 'Verificando...',
       error: 'Verificación Fallida'
     },
@@ -113,6 +130,7 @@ function App() {
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [statusType, setStatusType] = useState('idle')
+  const [progressLog, setProgressLog] = useState([])
   
   const [wallet, setWallet] = useState({
     connected: false,
@@ -120,6 +138,8 @@ function App() {
     connecting: false,
     wrongNetwork: false
   })
+
+  const [mapPos, setMapPos] = useState([-33.0, -68.8]) // Mendoza default
   
   const t = translations[lang]
 
@@ -214,6 +234,20 @@ function App() {
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`
   }
 
+  function LocationMarker() {
+    useMapEvents({
+      click(e) {
+        setMapPos([e.latlng.lat, e.latlng.lng])
+        document.getElementById('lat').value = e.latlng.lat.toFixed(6)
+        document.getElementById('lon').value = e.latlng.lng.toFixed(6)
+      },
+    })
+
+    return mapPos ? (
+      <Marker position={mapPos}></Marker>
+    ) : null
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     const formData = new FormData(e.target)
@@ -226,25 +260,36 @@ function App() {
     setError(null)
     setResult(null)
     setStatusType('loading')
+    setProgressLog([])
 
-    try {
-      const response = await fetch(
-        `http://localhost:8000/verify-vineyard?lat=${lat}&lon=${lon}&asset_address=${assetAddress}&token_id=${tokenId}`
-      )
-      
-      if (!response.ok) {
-        const errData = await response.json()
-        throw new Error(errData.detail || 'Verification failed')
-      }
-      
-      const data = await response.json()
+    const url = `http://localhost:8000/verify-stream?lat=${lat}&lon=${lon}&asset_address=${assetAddress}&token_id=${tokenId}`
+    const eventSource = new EventSource(url)
+
+    eventSource.addEventListener('status', (e) => {
+      setProgressLog(prev => [...prev, e.data])
+    })
+
+    eventSource.addEventListener('result', (e) => {
+      const data = JSON.parse(e.data)
       setResult(data)
       setStatusType('success')
-    } catch (err) {
-      setError(err.message)
-      setStatusType('error')
-    } finally {
       setLoading(false)
+      eventSource.close()
+    })
+
+    eventSource.addEventListener('error', (e) => {
+      setError(e.data || 'Verification failed')
+      setStatusType('error')
+      setLoading(false)
+      eventSource.close()
+    })
+
+    eventSource.onerror = (err) => {
+      console.error("EventSource failed:", err)
+      setError("Connection to oracle lost")
+      setStatusType('error')
+      setLoading(false)
+      eventSource.close()
     }
   }
 
@@ -376,6 +421,17 @@ function App() {
                   <div className="form-title">{t.form.title}</div>
                   <div className="form-subtitle">{t.form.subtitle}</div>
 
+                  {/* Interactive Map */}
+                  <div className="map-container-wrapper" style={{ marginBottom: '1.5rem', borderRadius: '12px', overflow: 'hidden', border: '1px solid var(--border-subtle)', height: '300px' }}>
+                    <MapContainer center={mapPos} zoom={11} scrollWheelZoom={false} style={{ height: '100%', width: '100%' }}>
+                      <TileLayer
+                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                      />
+                      <LocationMarker />
+                    </MapContainer>
+                  </div>
+
                   <form onSubmit={handleSubmit}>
                     <div className="form-grid">
                       <div className="form-group">
@@ -420,11 +476,61 @@ function App() {
                       </span>
                     </div>
 
+                    {/* Progress Log - Hackathon "Wow" Factor */}
+                    {loading && progressLog.length > 0 && (
+                      <div className="progress-log" style={{
+                        marginTop: '1rem',
+                        padding: '1rem',
+                        backgroundColor: 'rgba(0,0,0,0.2)',
+                        borderRadius: '8px',
+                        fontFamily: 'monospace',
+                        fontSize: '0.85rem',
+                        color: 'var(--accent-color)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.5rem'
+                      }}>
+                        {progressLog.map((log, i) => (
+                          <div key={i} className="log-entry" style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            animation: 'fadeIn 0.3s ease-out'
+                          }}>
+                            <span style={{ color: '#4ade80' }}>[DONE]</span> {log}
+                          </div>
+                        ))}
+                        <div className="log-entry current" style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
+                          color: '#fff'
+                        }}>
+                          <span className="spinner-small" style={{
+                            width: '12px',
+                            height: '12px',
+                            border: '2px solid #fff',
+                            borderTopColor: 'transparent',
+                            borderRadius: '50%',
+                            animation: 'spin 1s linear infinite'
+                          }} />
+                          Processing...
+                        </div>
+                      </div>
+                    )}
+
                     {result && (
                       <>
-                        <div className="score-section">
-                          <div className="score-value">{result.vitis_score}</div>
-                          <div className="score-label">{t.result.score}</div>
+                        <div className="score-section" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', alignItems: 'center' }}>
+                          {result.satellite_img && (
+                            <div className="satellite-preview" style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border-subtle)' }}>
+                              <img src={result.satellite_img} alt="Satellite Analysis" style={{ width: '100%', height: 'auto', display: 'block' }} />
+                            </div>
+                          )}
+                          <div className="score-box">
+                            <div className="score-value">{result.vitis_score}</div>
+                            <div className="score-label">VitisScore ({result.risk})</div>
+                          </div>
                         </div>
 
                         <div className="result-details">
@@ -433,10 +539,30 @@ function App() {
                             <span className="detail-value">{result.risk?.toUpperCase()}</span>
                           </div>
                           <div className="detail-row">
-                            <span className="detail-label">{t.result.hedera}</span>
+                            <span className="detail-label">Hedera Status</span>
                             <span className="detail-value">{result.hedera_notarization}</span>
                           </div>
-                          <div className="detail-row">
+
+                          {/* Dual-Chain Traceability Panel */}
+                          <div className="dual-chain-panel" style={{
+                            display: 'grid',
+                            gridTemplateColumns: '1fr 1fr',
+                            gap: '1rem',
+                            marginTop: '1.5rem',
+                            paddingTop: '1rem',
+                            borderTop: '1px solid var(--border-subtle)'
+                          }}>
+                            <div className="chain-card" style={{ padding: '0.75rem', backgroundColor: 'rgba(52, 211, 153, 0.05)', borderRadius: '8px', border: '1px solid rgba(52, 211, 153, 0.2)' }}>
+                              <div style={{ fontSize: '0.65rem', color: '#34d399', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '0.5rem' }}>🛡️ HIERA (Audit Trail)</div>
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>NOTARIZED: {result.hedera_notarization}</div>
+                            </div>
+                            <div className="chain-card" style={{ padding: '0.75rem', backgroundColor: 'rgba(139, 92, 246, 0.05)', borderRadius: '8px', border: '1px solid rgba(139, 92, 246, 0.2)' }}>
+                              <div style={{ fontSize: '0.65rem', color: '#8b5cf6', fontWeight: 'bold', textTransform: 'uppercase', marginBottom: '0.5rem' }}>🔗 ROOTSTOCK (Seal)</div>
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>TX: {result.rsk_tx_hash?.slice(0, 10)}...</div>
+                            </div>
+                          </div>
+
+                          <div className="executive-summary" style={{ marginTop: '1.5rem' }}>
                             <span className="detail-label">{t.result.tx}</span>
                             <a 
                               href={`https://explorer.testnet.rsk.co/tx/${result.rsk_tx_hash}`}
@@ -447,6 +573,32 @@ function App() {
                               {result.rsk_tx_hash?.substring(0, 12)}...
                             </a>
                           </div>
+                        </div>
+
+                        {/* Additional AI Transparency Details */}
+                        <div className="result-details" style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <span className="detail-label" style={{ color: 'var(--accent-color)', fontSize: '0.85rem' }}>{t.result.justification}</span>
+                            <span style={{ fontSize: '0.9rem', lineHeight: '1.4' }}>{result.justification}</span>
+                          </div>
+                          
+                          {result.detailed_analysis && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                              <span className="detail-label" style={{ color: 'var(--accent-color)', fontSize: '0.85rem' }}>{t.result.analysis}</span>
+                              <span style={{ fontSize: '0.9rem', lineHeight: '1.4', whiteSpace: 'pre-line' }}>{result.detailed_analysis}</span>
+                            </div>
+                          )}
+
+                          {result.recommendations && result.recommendations.length > 0 && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                              <span className="detail-label" style={{ color: 'var(--accent-color)', fontSize: '0.85rem' }}>{t.result.recommendations}</span>
+                              <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.9rem', lineHeight: '1.4' }}>
+                                {result.recommendations.map((rec, i) => (
+                                  <li key={i}>{rec}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
                         </div>
                       </>
                     )}

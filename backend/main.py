@@ -143,6 +143,82 @@ async def health_check() -> dict[str, Any]:
     return health
 
 
+@app.get("/verify-stream")
+async def verify_stream(lat: float, lon: float, asset_address: str, token_id: int):
+    """
+    Audita un viñedo con actualizaciones en tiempo real via SSE.
+    """
+    from sse_starlette.sse import EventSourceResponse
+    import json
+
+    async def event_generator():
+        asset_address_norm = asset_address.lower()
+        yield {"event": "status", "data": "🛰️ Iniciando consulta satelital..."}
+        
+        try:
+            # 1. Satélite
+            sat_data = await retry_satellite(lat, lon)
+            # If satellite API fails, it raises an exception (handled below)
+            # Status 'error' is legacy - new agent always returns 'success' or raises
+            if sat_data.get("status") == "error":
+                yield {"event": "error", "data": sat_data.get("message", "Satellite error")}
+                return
+
+            satellite_img = sat_data.get("satellite_img", "")
+            yield {"event": "status", "data": "🧠 Analizando salud del cultivo con IA..."}
+            
+            # 2. IA
+            verdict = await retry_ai_analysis(sat_data)
+            
+            yield {"event": "status", "data": "🛡️ Notarizando en Hedera Consensus Service..."}
+            
+            # 3. Hedera
+            topic_id = os.getenv("HEDERA_TOPIC_ID")
+            hedera_status = "Notarized (Demo)"
+            if hedera_node and topic_id:
+                hedera_status = await retry_hedera(topic_id, verdict)
+            
+            yield {"event": "status", "data": "🔗 Registrando pruebas en Rootstock..."}
+            
+            # 4. Rootstock
+            nonce = w3.eth.get_transaction_count(RSK_ORACLE_ADDRESS)
+            txn = vitis_contract.functions.certifyAsset(
+                Web3.to_checksum_address(asset_address_norm),
+                token_id,
+                int(verdict["score"]),
+                topic_id or "0.0.unknown"
+            ).build_transaction({
+                "chainId": 31,
+                "gas": 250000,
+                "gasPrice": w3.eth.gas_price,
+                "from": RSK_ORACLE_ADDRESS,
+                "nonce": nonce,
+            })
+
+            signed_txn = w3.eth.account.sign_transaction(txn, private_key=RSK_PRIVATE_KEY)
+            tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+            
+            yield {
+                "event": "result",
+                "data": json.dumps({
+                    "vitis_score": verdict["score"],
+                    "risk": verdict["risk_level"],
+                    "justification": verdict["justification"],
+                    "detailed_analysis": verdict.get("detailed_analysis", ""),
+                    "recommendations": verdict.get("recommendations", []),
+                    "satellite_img": satellite_img,
+                    "hedera_notarization": hedera_status,
+                    "rsk_tx_hash": tx_hash.hex(),
+                    "status": "ASSET_CERTIFIED"
+                })
+            }
+        except Exception as e:
+            logger.error(f"Streaming audit failed: {e}")
+            yield {"event": "error", "data": str(e)}
+
+    return EventSourceResponse(event_generator())
+
+
 @app.get("/verify-vineyard")
 async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> dict[str, Any]:
     """
@@ -165,10 +241,11 @@ async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> d
         
         logger.info(f"🛰️ Consulting satellite for {lat}, {lon}")
         sat_data = await retry_satellite(lat, lon)
-        if sat_data["status"] == "error":
-            logger.error(f"Satellite error: {sat_data['message']}")
-            raise HTTPException(status_code=400, detail=sat_data["message"])
+        if sat_data.get("status") == "error":
+            logger.error(f"Satellite error: {sat_data.get('message')}")
+            raise HTTPException(status_code=400, detail=sat_data.get("message", "Satellite error"))
 
+        satellite_img = sat_data.get("satellite_img", "")
         logger.info("🧠 AI analyzing vineyard health")
         verdict = await retry_ai_analysis(sat_data)
 
@@ -205,6 +282,9 @@ async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> d
             "vitis_score": verdict["score"],
             "risk": verdict["risk_level"],
             "justification": verdict["justification"],
+            "detailed_analysis": verdict.get("detailed_analysis", ""),
+            "recommendations": verdict.get("recommendations", []),
+            "satellite_img": satellite_img,
             "hedera_notarization": hedera_status,
             "rsk_tx_hash": tx_hash.hex(),
             "status": "ASSET_CERTIFIED"

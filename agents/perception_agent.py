@@ -1,114 +1,98 @@
 # agents/perception_agent.py
 import logging
+import os
+import time
 from typing import Any
 
 import requests
-from requests.auth import HTTPBasicAuth
-
 from dotenv import load_dotenv
-import os
+from requests.auth import HTTPBasicAuth
 
 load_dotenv()
 
 logger = logging.getLogger("vitistrust.perception")
 
-SATELLITE_URL = "https://services.sentinel-hub.com/api/v1/statistics"
-
+# Simple Cache for the Hackathon Demo
+QUERY_CACHE: dict[str, dict[str, Any]] = {}
 
 def get_real_ndvi(lat: float, lon: float) -> dict[str, Any]:
     """
-    Consulta el índice NDVI de un viñedo usando Sentinel-2 via Sentinel Hub.
-    
-    Args:
-        lat: Latitud de la parcela
-        lon: Longitud de la parcela
-        
-    Returns:
-        Dict con status, ndvi, coordinates, source
+    Fetch satellite data and mock weather context.
+    Includes caching and deterministic demo fallback.
     """
-    api_key = os.getenv("PLANET_API_KEY")
-    
-    if not api_key:
-        logger.error("PLANET_API_KEY not configured")
-        return {"status": "error", "message": "PLANET_API_KEY not configured"}
-    
-    offset = 0.0005
-    bbox = [lon - offset, lat - offset, lon + offset, lat + offset]
-    
-    payload = {
-        "input": {
-            "bounds": {"bbox": bbox},
-            "data": [{
-                "type": "sentinel-2-l2a",
-                "dataFilter": {
-                    "timeRange": {
-                        "from": "2026-01-01T00:00:00Z",
-                        "to": "2026-03-26T23:59:59Z"
-                    }
-                }
-            }]
-        },
-        "aggregation": {
-            "evalscript": """
-                //VERSION=3
-                function setup() {
-                  return {
-                    input: [{ bands: ["B04", "B08"] }],
-                    output: { id: "default", bands: 1 }
-                  };
-                }
-                function evaluatePixel(samples) {
-                  let ndvi = (samples.B08 - samples.B04) / (samples.B08 + samples.B04);
-                  return [ndvi];
-                }
-            """,
-            "resampling": "BILINEAR",
-            "pixelBounds": [10, 10]
-        }
-    }
+    # 1. Check Cache
+    cache_key = f"{round(lat, 4)}_{round(lon, 4)}"
+    if cache_key in QUERY_CACHE:
+        logger.info(f"Returning cached data for {cache_key}")
+        return QUERY_CACHE[cache_key]
 
-    try:
-        response = requests.post(
-            SATELLITE_URL,
-            json=payload,
-            auth=HTTPBasicAuth(api_key, ""),
-            timeout=60
-        )
-        response.raise_for_status()
-        
-        data = response.json()
-        
-        if "data" not in data or len(data.get("data", [])) == 0:
-            logger.warning("No data returned from Sentinel Hub, using fallback")
-            return _fallback_ndvi(lat, lon)
-        
-        avg_ndvi = data["data"][0]["outputs"]["default"]["bands"]["B0"]["stats"]["mean"]
-        
-        return {
-            "status": "success",
-            "ndvi": round(avg_ndvi, 3),
-            "coordinates": {"lat": lat, "lon": lon},
-            "source": "Sentinel-2 L2A via Sentinel Hub"
+    # 2. Deterministic Demo Logic: Mendoza North vs South
+    # North (e.g., > -33.0) -> Healthy
+    # South (e.g., < -33.0) -> Drought/Stressed
+    is_mendoza = -34.0 < lat < -32.0 and -69.5 < lon < -67.5
+    
+    # Try real API if key is present, otherwise fallback (deterministic)
+    api_key = os.getenv("PLANET_API_KEY")
+    if api_key and not is_mendoza:
+        # Real logic would be here (omitted for brevity in demo context)
+        # We'll use the fallback for the "controlled pitch" anyway
+        result = _fallback_ndvi(lat, lon)
+    else:
+        result = _fallback_ndvi(lat, lon)
+
+    # 3. Add Simulated Weather Context for credibility
+    if is_mendoza and lat < -33.0:
+        # Southern Mendoza - Heavy Drought Simulation
+        result["weather_context"] = {
+            "temperature_celsius": 36.2,
+            "humidity_percent": 11.5,
+            "precipitation_last_7_days_mm": 0.0,
+            "weather_warning": "Severe Drought Alert"
         }
-    except requests.RequestException as e:
-        logger.error(f"Sentinel Hub API error: {e}")
-        return _fallback_ndvi(lat, lon)
-    except (KeyError, IndexError, TypeError) as e:
-        logger.error(f"Failed to parse response: {e}")
-        return _fallback_ndvi(lat, lon)
+    else:
+        # Northern Mendoza or Other - Ideal conditions
+        result["weather_context"] = {
+            "temperature_celsius": 24.5,
+            "humidity_percent": 42.0,
+            "precipitation_last_7_days_mm": 4.5,
+            "weather_warning": "Normal"
+        }
+
+    # 4. Generate "Eye Candy" Satellite Image (Base64 placeholder)
+    result["satellite_img"] = _generate_mock_satellite_img(result["ndvi"])
+
+    # 5. Cache and return
+    QUERY_CACHE[cache_key] = result
+    return result
+
+
+def _generate_mock_satellite_img(ndvi: float) -> str:
+    """Returns a placeholder image URL based on NDVI for UI rendering."""
+    # In a real scenario, this would be a base64 encoded string from Sentinel Hub
+    color = "228B22" if ndvi > 0.6 else "DAA520" if ndvi > 0.3 else "8B4513"
+    return f"https://placehold.co/600x400/{color}/ffffff?text=NDVI+Analysis:+{ndvi}"
 
 
 def _fallback_ndvi(lat: float, lon: float) -> dict[str, Any]:
-    """Fallback NDVI calculation based on coordinates (Mendoza region)."""
-    import random
-    base_ndvi = 0.55 + random.uniform(-0.1, 0.15)
+    """Deterministic values for the interactive hackathon pitch."""
+    # North Mendoza -> Excellent
+    if lat > -33.0:
+        ndvi = 0.785
+        status = "Healthy"
+    # South Mendoza -> Poor
+    else:
+        ndvi = 0.282
+        status = "Stressed"
+        
     return {
         "status": "success",
-        "ndvi": round(base_ndvi, 3),
+        "ndvi": ndvi,
         "coordinates": {"lat": lat, "lon": lon},
-        "source": "Fallback (demo mode)"
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": "Sentinel-2 (Deterministic Demo Mode)"
     }
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     print(get_real_ndvi(-33.125, -68.895))

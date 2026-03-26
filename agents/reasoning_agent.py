@@ -35,15 +35,17 @@ def analyze_vineyard_health(satellite_data: dict[str, Any]) -> dict[str, Any]:
     
     prompt = f"""
 Actúa como un experto agrónomo de Mendoza, Argentina. 
-Analiza los siguientes datos satelitales de un viñedo:
+Analiza los siguientes datos satelitales y climatológicos de un viñedo:
 {json.dumps(satellite_data, indent=2)}
 
 TAREA:
-1. Calcula un 'VitisScore' de 0 a 100 basado en el NDVI (Normal: 0.4 - 0.9).
-2. Identifica riesgos (heladas, sequía, nubes).
-3. Redacta una justificación técnica breve (2 frases).
-4. Devuelve el resultado ESTRICTAMENTE en formato JSON con las llaves: 
-   'score', 'risk_level', 'justification'.
+1. Calcula un 'VitisScore' de 0 a 100 basado en el NDVI (Normal: 0.4 - 0.9) y las condiciones climáticas.
+2. Identifica el nivel de riesgo global (LOW, MEDIUM, HIGH) considerando estrés hídrico o anomalías.
+3. Redacta una justificación técnica ejecutiva (max 2 frases).
+4. Proporciona un análisis detallado métrica por métrica explicando cómo el NDVI cruzado con el clima afecta la salud de la vid.
+5. Da 2 recomendaciones accionables para el agricultor.
+6. Devuelve el resultado ESTRICTAMENTE en formato JSON con las siguientes llaves exactas: 
+   'score' (int), 'risk_level' (str), 'justification' (str), 'detailed_analysis' (str), 'recommendations' (list of str).
 """
     try:
         client = Groq(api_key=api_key)
@@ -75,7 +77,9 @@ def _fallback_verdict(error_msg: str) -> dict[str, Any]:
     return {
         "score": 0,
         "risk_level": "UNKNOWN",
-        "justification": f"Error en análisis: {error_msg}"
+        "justification": f"Error en análisis: {error_msg}",
+        "detailed_analysis": "No se pudo realizar el análisis detallado debido a un error de sistema.",
+        "recommendations": ["Revisar conexión API", "Contactar soporte técnico"]
     }
 
 

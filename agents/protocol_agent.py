@@ -72,10 +72,13 @@ class HederaProtocol:
     def __init__(self) -> None:
         self.client = _get_hedera_client()
         if self.client is None:
-            raise RuntimeError("Failed to initialize Hedera client")
+            logger.warning("Hedera SDK not found or client failed. Using MOCK mode for demo.")
+            self.is_mock = True
+        else:
+            self.is_mock = False
         
-        self.account_id = os.getenv("HEDERA_ACCOUNT_ID")
-        self.topic_id = os.getenv("HEDERA_TOPIC_ID")
+        self.account_id = os.getenv("HEDERA_ACCOUNT_ID", "0.0.0")
+        self.topic_id = os.getenv("HEDERA_TOPIC_ID", "0.0.0")
         logger.info(f"HederaProtocol initialized. Topic: {self.topic_id}")
     
     def _get_operator_key(self):
@@ -118,17 +121,14 @@ class HederaProtocol:
                 return tx_response
     
     def create_audit_topic(self) -> Optional[str]:
-        """
-        Crea un nuevo topic de auditoría en Hedera.
-        
-        Returns:
-            Topic ID si se crea exitosamente, None si falla
-        """
+        if getattr(self, 'is_mock', False):
+            mock_topic = f"0.0.{random.randint(100000, 999999)}"
+            logger.info(f"Mock topic created: {mock_topic}")
+            return mock_topic
+
         from hiero_sdk_python import TopicCreateTransaction
-        
         try:
             logger.info("Creating HCS audit topic...")
-            
             operator_key = self._get_operator_key()
             
             # Crear la transacción
@@ -165,23 +165,18 @@ class HederaProtocol:
             return None
     
     def notarize_vitis_report(self, topic_id: str, report_data: dict[str, Any]) -> str:
-        """
-        Notariza un reporte de viñedo en Hedera.
-        
-        Args:
-            topic_id: ID del topic de consenso (formato: 0.0.12345)
-            report_data: Dict con score, risk_level, justification
-            
-        Returns:
-            Status de la transacción o "ERROR"
-        """
         import json
-        from hiero_sdk_python import TopicMessageSubmitTransaction, TopicId
-        
         try:
             message = json.dumps(report_data)
             logger.info(f"Notarizing to topic {topic_id}: {message[:100]}...")
             
+            if getattr(self, 'is_mock', False):
+                # Fake delay for "wow" effect
+                time.sleep(1)
+                logger.info("Mock notarization successful (No SDK)")
+                return "SUCCESS (MOCK)"
+
+            from hiero_sdk_python import TopicMessageSubmitTransaction, TopicId
             operator_key = self._get_operator_key()
             tid = TopicId.from_string(topic_id)
             
@@ -207,9 +202,10 @@ class HederaProtocol:
             return status
             
         except Exception as e:
+            if getattr(self, 'is_mock', False):
+                logger.info("Mock notarization successful (No SDK)")
+                return "SUCCESS (MOCK)"
             logger.error(f"Failed to notarize: {e}")
-            import traceback
-            traceback.print_exc()
             return f"ERROR: {str(e)}"
     
     def get_topic_messages(self, topic_id: str, limit: int = 10) -> list[dict]:
