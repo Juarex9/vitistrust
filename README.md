@@ -15,9 +15,10 @@ de activos agrícolas (RWA). Cuando un viñedo es tokenizado como NFT:
 
 1. **El inversor necesita saber** si el viñedo está realmente sano
 2. **El oráculo consulta** imágenes satelitales (NDVI)
-3. **La IA analiza** los datos y genera un VitisScore (0-100)
-4. **Hedera notariza** el resultado de forma inmutable
-5. **Rootstock certifica** el NFT en un smart contract
+3. **La IA analiza** los datos y genera un VitisScore (0-100) e informe detallado
+4. **SSE Streaming**: El frontend muestra el progreso en tiempo real (Hacker Terminal)
+5. **Hedera notariza** el resultado de forma inmutable
+6. **Rootstock certifica** el NFT en un smart contract
 
 El resultado: un historial auditable que nadie puede falsificar.
 
@@ -183,9 +184,10 @@ AI_MODEL=llama-3.3-70b-versatile
 ### 1. Clonar e instalar dependencias
 
 ```bash
-git clone https://github.com/tu-repo/vitistrust.git
+git clone https://github.com/Juarex9/vitistrust.git
 cd vitistrust
-python -m venv venv
+# Recomendado: Python 3.13 para compatibilidad con Hedera SDK
+py -3.13 -m venv venv
 venv\Scripts\activate  # Windows
 # source venv/bin/activate  # Linux/Mac
 
