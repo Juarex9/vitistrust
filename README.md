@@ -1,0 +1,301 @@
+# 🍇 VitisTrust Oracle
+
+**Oráculo descentralizado para verificación de viñedos tokenizados**
+
+VitisTrust es un oráculo que audita la salud de viñedos usando datos satelitales e IA, 
+registrando las certificaciones en Hedera (HCS) y Rootstock (RSK) para garantizar 
+transparencia e inmutabilidad en inversiones agrícolas tokenizadas.
+
+---
+
+## 🎯 Qué Hace VitisTrust
+
+VitisTrust resuelve el problema de la **falta de transparencia** en la tokenización 
+de activos agrícolas (RWA). Cuando un viñedo es tokenizado como NFT:
+
+1. **El inversor necesita saber** si el viñedo está realmente sano
+2. **El oráculo consulta** imágenes satelitales (NDVI)
+3. **La IA analiza** los datos y genera un VitisScore (0-100)
+4. **Hedera notariza** el resultado de forma inmutable
+5. **Rootstock certifica** el NFT en un smart contract
+
+El resultado: un historial auditable que nadie puede falsificar.
+
+---
+
+## 🏗️ Arquitectura
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        VITISTRUST ORACLE                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐       │
+│  │   USER       │───▶│   FASTAPI    │◀───│   VERIFY     │       │
+│  │  (curl/API)  │    │   BACKEND    │    │  REQUEST    │       │
+│  └──────────────┘    └──────┬───────┘    └──────────────┘       │
+│                             │                                     │
+│         ┌───────────────────┼───────────────────┐                │
+│         ▼                   ▼                   ▼                │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐      │
+│  │  PERCEPTION  │    │  REASONING   │    │  PROTOCOL    │      │
+│  │   AGENT      │    │    AGENT     │    │    AGENT     │      │
+│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘      │
+│         │                   │                   │               │
+│         ▼                   ▼                   ▼               │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐      │
+│  │  SATELLITE   │    │   LLM (AI)   │    │   HEDERA     │      │
+│  │  (NDVI)      │    │  (Groq)      │    │   (HCS)      │      │
+│  └──────────────┘    └──────────────┘    └──────────────┘      │
+│         │                                       │                │
+│         │                    ┌─────────────────┘                │
+│         │                    ▼                                   │
+│         │            ┌──────────────┐                            │
+│         └───────────▶│  ROOTSTOCK   │◀── Smart Contract          │
+│                      │    (RSK)     │    VitisRegistry          │
+│                      └──────────────┘                            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🔄 Flujo de Auditoría Completo
+
+```mermaid
+1.Usuario         Pide verificación con:
+  llama           lat, lon, asset_address, token_id
+     │
+     ▼
+2.Perception      Consulta Sentinel Hub para obtener
+  Agent           datos NDVI de las coordenadas
+     │
+     ▼
+3.Reasoning      Envía NDVI a Groq (Llama 3.3)
+  Agent           Obtiene VitisScore, risk, justification
+     │
+     ▼
+4.Protocol        Notariza el reporte en Hedera HCS
+  Agent           Topic: 0.0.8386842
+     │
+     ▼
+5.Backend         Firma transacción en Rootstock
+  (main.py)       certifyAsset() en VitisRegistry
+     │
+     ▼
+6.Usuario         Recibe:
+  recibe          - vitis_score (0-100)
+                  - risk (low/moderate/high)
+                  - justification
+                  - hedera_notarization (SUCCESS)
+                  - rsk_tx_hash
+                  - status: ASSET_CERTIFIED
+```
+
+---
+
+## 📂 Estructura del Proyecto
+
+```
+vitistrust/
+├── agents/                      # Agentes de IA
+│   ├── perception_agent.py      # Satélite: Sentinel Hub → NDVI
+│   ├── reasoning_agent.py      # IA: Groq → VitisScore
+│   └── protocol_agent.py       # Hedera: HCS → Notarización
+├── backend/
+│   ├── main.py                 # FastAPI: Endpoints del oráculo
+│   └── constants.py            # ABI del contrato VitisRegistry
+├── contracts/
+│   └── VitisRegistry.sol       # Smart Contract en RSK
+├── scripts/
+│   └── deploy_rsk.py           # Deploy del contrato
+├── .env                        # Configuración (NOコミット)
+├── requirements.txt             # Dependencias Python
+├── AGENTS.md                   # Guía para agentes IA
+└── README.md                   # Este archivo
+```
+
+---
+
+## 🌐 APIs y Endpoints
+
+### Endpoints del Oráculo
+
+| Method | Endpoint | Descripción |
+|--------|----------|-------------|
+| GET | `/health` | Verifica conexiones a RSK y Hedera |
+| GET | `/verify-vineyard?lat=X&lon=Y&asset_address=Z&token_id=N` | Ejecuta auditoría completa |
+| GET | `/certificate/{asset_address}/{token_id}` | Consulta certificación existente |
+
+### Ejemplo de Uso
+
+```bash
+# Auditar un viñedo
+curl "http://localhost:8000/verify-vineyard?lat=-33.1254&lon=-68.8942&asset_address=0x5B38Da6a701C568545dCfcB03FcB875f56beddC4&token_id=1"
+
+# Respuesta:
+{
+  "vitis_score": 75,
+  "risk": "low",
+  "justification": "El NDVI de 0.75 indica excelente salud vegetativa...",
+  "hedera_notarization": "SUCCESS",
+  "rsk_tx_hash": "0xabc123...",
+  "status": "ASSET_CERTIFIED"
+}
+
+# Consultar certificación previa
+curl "http://localhost:8000/certificate/0x5B38Da6a701C568545dCfcB03FcB875f56beddC4/1"
+
+# Verificar salud del oráculo
+curl "http://localhost:8000/health"
+```
+
+---
+
+## ⚙️ Configuración
+
+### Variables de Entorno (.env)
+
+```bash
+# ===== ROOTSTOCK (RSK) =====
+RSK_RPC_URL=https://public-node.testnet.rsk.co
+RSK_PRIVATE_KEY=dd99edbb6aeedaae076e3797b018fe38bc090e356668fa854ee2026cda45ec6e
+RSK_ORACLE_ADDRESS=0x1e9423e4651CB859C38e075598d8d75DCA2Df0E0
+RSK_CONTRACT_ADDRESS=0x1418344A54a065987B991574632CBd36114e308d
+
+# ===== HEDERA / HIERO =====
+HEDERA_ACCOUNT_ID=0.0.8384975
+HEDERA_PRIVATE_KEY=436db4f9f8d4101fc0708cd79d36169ccfb63a14bf62a80423a29b5a51491a6b
+HEDERA_DER_PRIVATE_KEY=3030020100300706052b8104000a04220420436db4f9f8d4101fc0708cd79d36169ccfb63a14bf62a80423a29b5a51491a6b
+HEDERA_TOPIC_ID=0.0.8386842
+
+# ===== SATÉLITE =====
+PLANET_API_KEY=PLAK9b267639c45e42eb8391729123abb5b4
+
+# ===== IA (GROQ) =====
+AI_API_KEY=gsk_...
+AI_MODEL=llama-3.3-70b-versatile
+```
+
+---
+
+## 🚀 Instalación y Ejecución
+
+### 1. Clonar e instalar dependencias
+
+```bash
+git clone https://github.com/tu-repo/vitistrust.git
+cd vitistrust
+python -m venv venv
+venv\Scripts\activate  # Windows
+# source venv/bin/activate  # Linux/Mac
+
+pip install -r requirements.txt
+```
+
+### 2. Configurar .env
+
+Copiar el ejemplo anterior y completar con tus claves.
+
+### 3. Desplegar contrato (primera vez)
+
+```bash
+python scripts/deploy_rsk.py
+```
+
+Esto desplegará `VitisRegistry.sol` a Rootstock Testnet y te dará la dirección del contrato.
+
+### 4. Levantar el servidor
+
+```bash
+python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### 5. Auditar un viñedo
+
+```bash
+# Con curl
+curl "http://localhost:8000/verify-vineyard?lat=-33.1254&lon=-68.8942&asset_address=0xTU_ADDRESS&token_id=1"
+```
+
+---
+
+## 🧪 Tecnologías Utilizadas
+
+| Capa | Tecnología | Propósito |
+|------|------------|-----------|
+| API | FastAPI + Uvicorn | Servidor REST |
+| Satélite | Sentinel Hub (ESA) | Imágenes multiespectrales |
+| IA | Groq (Llama 3.3) | Análisis de datos |
+| Blockchain 1 | Hedera (HCS) | Notarización inmutable |
+| Blockchain 2 | Rootstock (RSK) | Smart Contracts (EVM) |
+| Web3 | web3.py | Interacción con RSK |
+
+---
+
+## 📋 Contrato Inteligente
+
+### VitisRegistry.sol (Rootstock)
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+contract VitisRegistry {
+    struct Certificate {
+        uint256 score;      // VitisScore (0-100)
+        uint256 timestamp;  // Timestamp de la auditoría
+        string hederaTopic; // Topic ID de Hedera
+    }
+    
+    // Mapping: asset address + token id => Certificate
+    mapping(address => mapping(uint256 => Certificate)) public certificates;
+    
+    // Función que el oráculo llama para certificar
+    function certifyAsset(
+        address assetContract,
+        uint256 tokenId,
+        uint256 score,
+        string memory topicId
+    ) public {
+        certificates[assetContract][tokenId] = Certificate({
+            score: score,
+            timestamp: block.timestamp,
+            hederaTopic: topicId
+        });
+    }
+}
+```
+
+---
+
+## 🔍 Explorando las Transacciones
+
+### Hedera (HashScan)
+- Topic: https://testnet.hashscan.io/topic/0.0.8386842
+- Messages: Todos los reportes de auditoría
+
+### Rootstock (RSK Explorer)
+- Contrato: https://explorer.testnet.rsk.co/address/0x1418344A54a065987B991574632CBd36114e308d
+- Transacciones: Ver el tx_hash en la respuesta
+
+---
+
+## 💡 Nota para el Jurado
+
+**VitisTrust resuelve un problema real:**
+
+En la tokenización de viñedos, el inversor no puede verificar si el activo subyacente 
+realmente existe y está sano. VitisTrust resolve este problema:
+
+1. **Satélite + IA**: Datos objetivos, no manipulables
+2. **双重 blockchain**: Hedera para consenso + Rootstock para seguridad Bitcoin
+3. **Inmutable**: Cada auditoría queda registrada para siempre
+4. **Descentralizado**: Nadie puede falsificar un certificado
+
+> "VitisTrust trae transparencia verificable al mercado de vinos tokenizados."
+
+---
+
+## 📄 Licencia
+
+MIT License - Ver archivo LICENSE para detalles.
