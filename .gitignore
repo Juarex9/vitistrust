@@ -41,3 +41,7 @@ yarn-error.log*
 .env.development.local
 .env.test.local
 .env.production.local
+
+# --- AGENT SKILLS (LOCAL ONLY) ---
+.agents/
+skills-lock.json
