@@ -280,6 +280,36 @@ contract VitisRegistry {
 
 ---
 
+## 🧪 Testing
+
+### Smart Contracts (Foundry)
+
+```bash
+# Instalar dependencias
+forge install
+
+# Correr tests
+forge test
+
+# Tests con verbose
+forge test -vvv
+```
+
+### Backend (Python)
+
+```bash
+# Correr tests
+pytest
+
+# Tests con verbose
+pytest -v
+
+# Coverage
+pytest --cov=. --cov-report=html
+```
+
+---
+
 ## 💡 Nota para el Jurado
 
 **VitisTrust resuelve un problema real:**
@@ -293,6 +323,48 @@ realmente existe y está sano. VitisTrust resolve este problema:
 4. **Descentralizado**: Nadie puede falsificar un certificado
 
 > "VitisTrust trae transparencia verificable al mercado de vinos tokenizados."
+
+## 🏆 Estado del Proyecto
+
+| Componente | Estado |
+|------------|--------|
+| Smart Contract | ✅ Tests pasando (14/14) |
+| Backend API | ✅ Retry logic + errores |
+| Frontend | ✅ React + MetaMask |
+| Tests Python | ✅ 11 tests pasando |
+| Demo en vivo | ✅ Listo para ejecutar |
+
+---
+
+## 🚀 Demo en Vivo
+
+### Prerequisites
+- Backend corriendo: `python -m uvicorn backend.main:app --reload`
+- Frontend corriendo: `cd frontend-react && npm run dev`
+- MetaMask instalado y conectado a RSK Testnet
+
+### Ejecutar Verificación
+
+1. Abrir http://localhost:5173
+2. Conectar wallet (MetaMask)
+3. Ingresar coordenadas de viñedo:
+   - **Latitud**: -32.8895 (Mendoza, Argentina)
+   - **Longitud**: -68.8458
+4. Ingresar Asset Address y Token ID
+5. Click en "Run Verification"
+
+### Respuesta Esperada
+
+```json
+{
+  "vitis_score": 75,
+  "risk": "low",
+  "justification": "El NDVI de 0.75 indica...",
+  "hedera_notarization": "SUCCESS",
+  "rsk_tx_hash": "0x...",
+  "status": "ASSET_CERTIFIED"
+}
+```
 
 ---
 

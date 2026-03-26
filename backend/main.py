@@ -1,6 +1,8 @@
 import os
 import logging
+import asyncio
 from typing import Any
+from functools import wraps
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +33,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+MAX_RETRIES = 3
+RETRY_DELAYS = [1, 2, 5]
+
+def retry_on_failure(max_retries: int = MAX_RETRIES, delays: list = RETRY_DELAYS):
+    """Decorator para reintentar funciones que pueden fallar."""
+    def decorator(func):
+        @wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        delay = delays[attempt]
+                        logger.warning(f"{func.__name__} failed (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {e}")
+                        await asyncio.sleep(delay)
+                    else:
+                        logger.error(f"{func.__name__} failed after {max_retries} attempts: {e}")
+            raise last_error
+        
+        @wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        delay = delays[attempt]
+                        logger.warning(f"{func.__name__} failed (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {e}")
+                        import time
+                        time.sleep(delay)
+                    else:
+                        logger.error(f"{func.__name__} failed after {max_retries} attempts: {e}")
+            raise last_error
+        
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        return sync_wrapper
+    return decorator
+
 RSK_RPC_URL = os.getenv("RSK_RPC_URL")
 RSK_ORACLE_ADDRESS = os.getenv("RSK_ORACLE_ADDRESS")
 RSK_PRIVATE_KEY = os.getenv("RSK_PRIVATE_KEY")
@@ -48,6 +94,23 @@ try:
     hedera_node = HederaProtocol()
 except Exception as e:
     logger.error(f"Failed to initialize Hedera: {e}")
+
+retry_decorator = retry_on_failure()
+
+@retry_decorator
+async def retry_satellite(lat: float, lon: float) -> dict[str, Any]:
+    """Retry wrapper for satellite API calls."""
+    return get_real_ndvi(lat, lon)
+
+@retry_decorator
+async def retry_ai_analysis(sat_data: dict[str, Any]) -> dict[str, Any]:
+    """Retry wrapper for AI analysis."""
+    return analyze_vineyard_health(sat_data)
+
+@retry_decorator  
+async def retry_hedera(topic_id: str, verdict: dict[str, Any]) -> str:
+    """Retry wrapper for Hedera notarization."""
+    return hedera_node.notarize_vitis_report(topic_id, verdict)
 
 
 class VerifyRequest(BaseModel):
@@ -101,13 +164,13 @@ async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> d
             raise HTTPException(status_code=503, detail="Contract not configured")
         
         logger.info(f"🛰️ Consulting satellite for {lat}, {lon}")
-        sat_data = get_real_ndvi(lat, lon)
+        sat_data = await retry_satellite(lat, lon)
         if sat_data["status"] == "error":
             logger.error(f"Satellite error: {sat_data['message']}")
             raise HTTPException(status_code=400, detail=sat_data["message"])
 
         logger.info("🧠 AI analyzing vineyard health")
-        verdict = analyze_vineyard_health(sat_data)
+        verdict = await retry_ai_analysis(sat_data)
 
         logger.info("🛡️ Notarizing in Hedera")
         topic_id = os.getenv("HEDERA_TOPIC_ID")
@@ -115,7 +178,7 @@ async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> d
             raise HTTPException(status_code=500, detail="HEDERA_TOPIC_ID not configured")
         if not hedera_node:
             raise HTTPException(status_code=503, detail="Hedera not configured")
-        hedera_status = hedera_node.notarize_vitis_report(topic_id, verdict)
+        hedera_status = await retry_hedera(topic_id, verdict)
 
         logger.info("🔗 Signing certification in Rootstock")
         nonce = w3.eth.get_transaction_count(RSK_ORACLE_ADDRESS)
@@ -193,6 +256,46 @@ async def get_certificate(asset_address: str, token_id: int) -> dict[str, Any]:
         logger.error(f"Certificate query failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/certifications/{asset_address}")
+async def get_certification_history(asset_address: str) -> dict[str, Any]:
+    """Consulta el historial de certificaciones para un activo."""
+    try:
+        if not vitis_contract:
+            raise HTTPException(status_code=503, detail="Contract not configured")
+        
+        normalized_address = Web3.to_checksum_address(asset_address.lower())
+        logger.info(f"Querying certification history for {normalized_address}")
+        
+        try:
+            token_ids = vitis_contract.functions.getCertificationIds(normalized_address).call()
+        except Exception:
+            token_ids = []
+        
+        certifications = []
+        for token_id in token_ids:
+            try:
+                cert = vitis_contract.functions.certificates(normalized_address, token_id).call()
+                if cert[0] > 0 or cert[1] > 0:
+                    certifications.append({
+                        "token_id": token_id,
+                        "vitis_score": cert[0],
+                        "timestamp": cert[1],
+                        "hedera_topic_id": cert[2]
+                    })
+            except Exception:
+                continue
+        
+        return {
+            "asset_address": normalized_address,
+            "total_certifications": len(certifications),
+            "certifications": certifications
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Certification history query failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
