@@ -4,10 +4,10 @@
   "outputDirectory": "dist",
   "devCommand": "npm run dev",
   "rootDirectory": "frontend-react",
-  "rewrites": [
+    "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "https://vitistrust-api.onrender.com/$1"
+      "destination": "https://vitistrust.onrender.com/$1"
     }
   ],
   "headers": [
