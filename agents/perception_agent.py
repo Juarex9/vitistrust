@@ -1,98 +1,159 @@
 # agents/perception_agent.py
 import logging
-import os
-import time
 from typing import Any
+import time
 
 import requests
+
 from dotenv import load_dotenv
-from requests.auth import HTTPBasicAuth
+import os
 
 load_dotenv()
 
 logger = logging.getLogger("vitistrust.perception")
 
-# Simple Cache for the Hackathon Demo
-QUERY_CACHE: dict[str, dict[str, Any]] = {}
+SATELLITE_STATS_URL = "https://services.sentinel-hub.com/api/v1/statistics"
+
+_token_cache = {"token": None, "expires": 0}
+
+
+def _get_sentinel_token() -> str | None:
+    """Obtiene access token de Sentinel Hub OAuth."""
+    global _token_cache
+    now = time.time()
+    
+    if _token_cache["token"] and now < _token_cache["expires"] - 60:
+        return _token_cache["token"]
+    
+    client_id = os.getenv("SENTINEL_CLIENT_ID")
+    client_secret = os.getenv("SENTINEL_CLIENT_SECRET")
+    
+    if not client_id or not client_secret:
+        logger.error("SENTINEL_CLIENT_ID or SENTINEL_CLIENT_SECRET not configured")
+        return None
+    
+    try:
+        resp = requests.post(
+            "https://services.sentinel-hub.com/oauth/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+            timeout=15
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            _token_cache["token"] = data["access_token"]
+            _token_cache["expires"] = now + data.get("expires_in", 3600)
+            return _token_cache["token"]
+    except Exception as e:
+        logger.error(f"Sentinel OAuth failed: {e}")
+    
+    return None
+
 
 def get_real_ndvi(lat: float, lon: float) -> dict[str, Any]:
     """
-    Fetch satellite data and mock weather context.
-    Includes caching and deterministic demo fallback.
-    """
-    # 1. Check Cache
-    cache_key = f"{round(lat, 4)}_{round(lon, 4)}"
-    if cache_key in QUERY_CACHE:
-        logger.info(f"Returning cached data for {cache_key}")
-        return QUERY_CACHE[cache_key]
-
-    # 2. Deterministic Demo Logic: Mendoza North vs South
-    # North (e.g., > -33.0) -> Healthy
-    # South (e.g., < -33.0) -> Drought/Stressed
-    is_mendoza = -34.0 < lat < -32.0 and -69.5 < lon < -67.5
+    Consulta el índice NDVI de un viñedo usando Sentinel-2 via Sentinel Hub.
     
-    # Try real API if key is present, otherwise fallback (deterministic)
-    api_key = os.getenv("PLANET_API_KEY")
-    if api_key and not is_mendoza:
-        # Real logic would be here (omitted for brevity in demo context)
-        # We'll use the fallback for the "controlled pitch" anyway
-        result = _fallback_ndvi(lat, lon)
-    else:
-        result = _fallback_ndvi(lat, lon)
-
-    # 3. Add Simulated Weather Context for credibility
-    if is_mendoza and lat < -33.0:
-        # Southern Mendoza - Heavy Drought Simulation
-        result["weather_context"] = {
-            "temperature_celsius": 36.2,
-            "humidity_percent": 11.5,
-            "precipitation_last_7_days_mm": 0.0,
-            "weather_warning": "Severe Drought Alert"
+    Args:
+        lat: Latitud de la parcela
+        lon: Longitud de la parcela
+        
+    Returns:
+        Dict con status, ndvi, coordinates, source
+    """
+    token = _get_sentinel_token()
+    
+    if not token:
+        logger.warning("No Sentinel token, using fallback NDVI")
+        return _fallback_ndvi(lat, lon)
+    
+    offset = 0.0005
+    bbox = [lon - offset, lat - offset, lon + offset, lat + offset]
+    
+    payload = {
+        "input": {
+            "bounds": {"bbox": bbox},
+            "data": [{
+                "type": "sentinel-2-l2a",
+                "dataFilter": {
+                    "timeRange": {
+                        "from": "2025-01-01T00:00:00Z",
+                        "to": "2026-03-26T23:59:59Z"
+                    },
+                    "maxCloudCoverage": 50
+                }
+            }]
+        },
+        "aggregation": {
+            "evalscript": """
+                //VERSION=3
+                function setup() {
+                  return {
+                    input: [{ bands: ["B04", "B08"] }],
+                    output: { id: "default", bands: 1 }
+                  };
+                }
+                function evaluatePixel(samples) {
+                  let ndvi = (samples.B08 - samples.B04) / (samples.B08 + samples.B04);
+                  return [ndvi];
+                }
+            """,
+            "resampling": "BILINEAR",
+            "pixelBounds": [10, 10]
         }
-    else:
-        # Northern Mendoza or Other - Ideal conditions
-        result["weather_context"] = {
-            "temperature_celsius": 24.5,
-            "humidity_percent": 42.0,
-            "precipitation_last_7_days_mm": 4.5,
-            "weather_warning": "Normal"
+    }
+
+    try:
+        response = requests.post(
+            SATELLITE_STATS_URL,
+            json=payload,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=60
+        )
+        
+        if response.status_code == 401:
+            logger.warning("Sentinel token expired, using fallback")
+            _token_cache["token"] = None
+            return _fallback_ndvi(lat, lon)
+        
+        response.raise_for_status()
+        data = response.json()
+        
+        if "data" not in data or len(data.get("data", [])) == 0:
+            logger.warning("No data from Sentinel, using fallback")
+            return _fallback_ndvi(lat, lon)
+        
+        avg_ndvi = data["data"][0]["outputs"]["default"]["bands"]["B0"]["stats"]["mean"]
+        
+        return {
+            "status": "success",
+            "ndvi": round(avg_ndvi, 3),
+            "coordinates": {"lat": lat, "lon": lon},
+            "source": "Sentinel-2 L2A via Sentinel Hub"
         }
-
-    # 4. Generate "Eye Candy" Satellite Image (Base64 placeholder)
-    result["satellite_img"] = _generate_mock_satellite_img(result["ndvi"])
-
-    # 5. Cache and return
-    QUERY_CACHE[cache_key] = result
-    return result
-
-
-def _generate_mock_satellite_img(ndvi: float) -> str:
-    """Returns a placeholder image URL based on NDVI for UI rendering."""
-    # In a real scenario, this would be a base64 encoded string from Sentinel Hub
-    color = "228B22" if ndvi > 0.6 else "DAA520" if ndvi > 0.3 else "8B4513"
-    return f"https://placehold.co/600x400/{color}/ffffff?text=NDVI+Analysis:+{ndvi}"
+    except requests.RequestException as e:
+        logger.error(f"Sentinel Hub API error: {e}")
+        return _fallback_ndvi(lat, lon)
+    except (KeyError, IndexError, TypeError) as e:
+        logger.error(f"Failed to parse response: {e}")
+        return _fallback_ndvi(lat, lon)
 
 
 def _fallback_ndvi(lat: float, lon: float) -> dict[str, Any]:
-    """Deterministic values for the interactive hackathon pitch."""
-    # North Mendoza -> Excellent
-    if lat > -33.0:
-        ndvi = 0.785
-        status = "Healthy"
-    # South Mendoza -> Poor
-    else:
-        ndvi = 0.282
-        status = "Stressed"
-        
+    """Fallback NDVI determinista basado en coordenadas (región de Mendoza)."""
+    # Usar hash de coords para obtener seed determinista
+    seed = int(abs(lat * lon * 1000000) % 10000)
+    base_ndvi = 0.55 + (seed / 100000) - 0.05
     return {
         "status": "success",
-        "ndvi": ndvi,
+        "ndvi": round(base_ndvi, 3),
         "coordinates": {"lat": lat, "lon": lon},
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "source": "Sentinel-2 (Deterministic Demo Mode)"
+        "source": "Fallback (demo mode)"
     }
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     print(get_real_ndvi(-33.125, -68.895))
