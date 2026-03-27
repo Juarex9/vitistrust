@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import './index.css'
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
 const translations = {
   en: {
     hero: {
@@ -131,9 +133,9 @@ function App() {
     try {
       let url
       if (mode === 'check') {
-        url = `http://localhost:8000/certificate/${assetAddress}/${tokenId}`
+        url = `${API_BASE}/certificate/${assetAddress}/${tokenId}`
       } else {
-        url = `http://localhost:8000/verify-vineyard?lat=${lat}&lon=${lon}&asset_address=${assetAddress}&token_id=${tokenId}`
+        url = `${API_BASE}/verify-vineyard?lat=${lat}&lon=${lon}&asset_address=${assetAddress}&token_id=${tokenId}`
       }
       
       const response = await fetch(url)

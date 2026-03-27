@@ -1,3 +1,9 @@
+# ============================================
+# VitisTrust API - Production Server
+# ============================================
+# Run with: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+# ============================================
+
 import os
 import logging
 import asyncio
@@ -26,11 +32,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("vitistrust")
 
-app = FastAPI(title="VitisTrust Oracle API")
+app = FastAPI(
+    title="VitisTrust Oracle API",
+    version="2.0.0",
+    description="Satellite-verified NFT certification for vineyard assets"
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:5174"],
+    allow_origins=[
+        "https://vitistrust.vercel.app",
+        "http://localhost:5173",
+        "http://localhost:3000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -43,7 +57,6 @@ MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 5]
 
 def retry_on_failure(max_retries: int = MAX_RETRIES, delays: list = RETRY_DELAYS):
-    """Decorator para reintentar funciones que pueden fallar."""
     def decorator(func):
         @wraps(func)
         async def async_wrapper(*args, **kwargs):
@@ -283,7 +296,6 @@ async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> d
     4. Notariza en Hedera (HCS)
     5. Certifica en Rootstock (VitisRegistry)
     """
-    # Normalize address to lowercase
     asset_address = asset_address.lower()
     
     logger.info(f"Starting audit for asset {asset_address} token {token_id}")
@@ -292,7 +304,7 @@ async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> d
         if not vitis_contract:
             raise HTTPException(status_code=503, detail="Contract not configured")
         
-        logger.info(f"🛰️ Consulting satellite for {lat}, {lon}")
+        logger.info(f"Consulting satellite for {lat}, {lon}")
         sat_data = await retry_satellite(lat, lon)
         if sat_data["status"] == "error":
             logger.error(f"Satellite error: {sat_data['message']}")
@@ -300,16 +312,15 @@ async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> d
 
         ndvi = sat_data.get("ndvi", 0)
 
-        # Validación del viñedo
         validation_result = validate_vineyard(
             lat, lon, ndvi, asset_address, token_id, w3, vitis_contract
         )
         logger.info(f"Validation: geoloc={validation_result['validations']['geolocation']['valid']}, vegetation={validation_result['validations']['vegetation']['valid']}")
 
-        logger.info("🧠 AI analyzing vineyard health")
+        logger.info("AI analyzing vineyard health")
         verdict = await retry_ai_analysis(sat_data)
 
-        logger.info("🛡️ Notarizing in Hedera")
+        logger.info("Notarizing in Hedera")
         topic_id = os.getenv("HEDERA_TOPIC_ID")
         if not topic_id:
             raise HTTPException(status_code=500, detail="HEDERA_TOPIC_ID not configured")
@@ -317,7 +328,7 @@ async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> d
             raise HTTPException(status_code=503, detail="Hedera not configured")
         hedera_status = await retry_hedera(topic_id, verdict)
 
-        logger.info("🔗 Signing certification in Rootstock")
+        logger.info("Signing certification in Rootstock")
         nonce = w3.eth.get_transaction_count(RSK_ORACLE_ADDRESS)
         
         txn = vitis_contract.functions.certifyAsset(
@@ -336,10 +347,9 @@ async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> d
         signed_txn = w3.eth.account.sign_transaction(txn, private_key=RSK_PRIVATE_KEY)
         tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
 
-        # Imagen satelital
         satellite_img = await _get_satellite_image_base64(lat, lon, ndvi)
         
-        logger.info(f"✅ Audit complete. TX: {tx_hash.hex()}")
+        logger.info(f"Audit complete. TX: {tx_hash.hex()}")
         
         return {
             "vitis_score": verdict["score"],
@@ -358,7 +368,7 @@ async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> d
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ Audit failed: {str(e)}")
+        logger.error(f"Audit failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -369,7 +379,6 @@ async def get_certificate(asset_address: str, token_id: int) -> dict[str, Any]:
         if not vitis_contract:
             raise HTTPException(status_code=503, detail="Contract not configured")
         
-        # Normalizar address a lowercase checksum
         normalized_address = Web3.to_checksum_address(asset_address.lower())
         logger.info(f"Querying certificate for {normalized_address} token {token_id}")
         
@@ -380,7 +389,6 @@ async def get_certificate(asset_address: str, token_id: int) -> dict[str, Any]:
         
         logger.info(f"Raw certificate data: {cert}")
         
-        # Verificar si hay datos válidos (score > 0 indica que existe)
         vitis_score = cert[0]
         timestamp = cert[1]
         topic_id = cert[2]
@@ -391,7 +399,7 @@ async def get_certificate(asset_address: str, token_id: int) -> dict[str, Any]:
         return {
             "asset_address": normalized_address,
             "token_id": token_id,
-            "vitis_score": vitis_score,
+            "vitals_score": vitis_score,
             "timestamp": timestamp,
             "hedera_topic_id": topic_id
         }
@@ -445,4 +453,5 @@ async def get_certification_history(asset_address: str) -> dict[str, Any]:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

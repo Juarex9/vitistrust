@@ -1,0 +1,30 @@
+services:
+  - name: vitistrust-api
+    type: web
+    region: oregon
+    plan: free
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: RSK_RPC_URL
+        sync: false
+      - key: RSK_ORACLE_ADDRESS
+        sync: false
+      - key: RSK_PRIVATE_KEY
+        sync: false
+      - key: RSK_CONTRACT_ADDRESS
+        sync: false
+      - key: HEDERA_ACCOUNT_ID
+        sync: false
+      - key: HEDERA_DER_PRIVATE_KEY
+        sync: false
+      - key: HEDERA_TOPIC_ID
+        sync: false
+      - key: SENTINEL_CLIENT_ID
+        sync: false
+      - key: SENTINEL_CLIENT_SECRET
+        sync: false
+      - key: AI_API_KEY
+        sync: false
