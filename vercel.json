@@ -1,8 +1,9 @@
 {
-  "framework": "vite",
+  "framework": null,
   "buildCommand": "cd frontend-react && npm install && npm run build",
   "outputDirectory": "frontend-react/dist",
-  "installCommand": "echo 'No Python deps needed'",
+  "installCommand": "true",
+  "devCommand": "npm run dev",
   "rewrites": [
     {
       "source": "/api/(.*)",
@@ -15,7 +16,7 @@
       "headers": [
         {
           "key": "Access-Control-Allow-Origin",
-          "value": "https://vitistrust.vercel.app"
+          "value": "*"
         },
         {
           "key": "Access-Control-Allow-Methods",
