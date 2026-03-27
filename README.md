@@ -1,16 +1,16 @@
 # 🍇 VitisTrust Oracle
 
-**Oráculo descentralizado para verificación de viñedos tokenizados**
+**Certificador descentralizado de viñedos tokenizados**
 
-VitisTrust es un oráculo que audita la salud de viñedos usando datos satelitales e IA, 
-registrando las certificaciones en Hedera (HCS) y Rootstock (RSK) para garantizar 
+VitisTrust es un oráculo que audita la salud de viñedos usando datos satelitales e IA,
+registrando las certificaciones en Hedera (HCS) y Rootstock (RSK) para garantizar
 transparencia e inmutabilidad en inversiones agrícolas tokenizadas.
 
 ---
 
 ## 🎯 Qué Hace VitisTrust
 
-VitisTrust resuelve el problema de la **falta de transparencia** en la tokenización 
+VitisTrust resuelve el problema de la **falta de transparencia** en la tokenización
 de activos agrícolas (RWA). Cuando un viñedo es tokenizado como NFT:
 
 1. **El inversor necesita saber** si el viñedo está realmente sano
@@ -29,66 +29,59 @@ El resultado: un historial auditable que nadie puede falsificar.
 ┌─────────────────────────────────────────────────────────────────┐
 │                        VITISTRUST ORACLE                         │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐       │
-│  │   USER       │───▶│   FASTAPI    │◀───│   VERIFY     │       │
-│  │  (curl/API)  │    │   BACKEND    │    │  REQUEST    │       │
-│  └──────────────┘    └──────┬───────┘    └──────────────┘       │
-│                             │                                     │
-│         ┌───────────────────┼───────────────────┐                │
-│         ▼                   ▼                   ▼                │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐      │
-│  │  PERCEPTION  │    │  REASONING   │    │  PROTOCOL    │      │
-│  │   AGENT      │    │    AGENT     │    │    AGENT     │      │
-│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘      │
-│         │                   │                   │               │
-│         ▼                   ▼                   ▼               │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐      │
-│  │  SATELLITE   │    │   LLM (AI)   │    │   HEDERA     │      │
-│  │  (NDVI)      │    │  (Groq)      │    │   (HCS)      │      │
-│  └──────────────┘    └──────────────┘    └──────────────┘      │
-│         │                                       │                │
-│         │                    ┌─────────────────┘                │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐     │
+│  │   USER       │───▶│   FASTAPI    │◀───│   VERIFY     │     │
+│  │  (Frontend)  │    │   BACKEND    │    │  REQUEST    │     │
+│  └──────────────┘    └──────┬───────┘    └──────────────┘     │
+│                             │                                   │
+│         ┌───────────────────┼───────────────────┐              │
+│         ▼                   ▼                   ▼              │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    │
+│  │  PERCEPTION  │    │  REASONING   │    │  PROTOCOL    │    │
+│  │   AGENT      │    │    AGENT     │    │    AGENT     │    │
+│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘    │
+│         │                   │                   │             │
+│         ▼                   ▼                   ▼             │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    │
+│  │  SATELLITE   │    │   LLM (AI)   │    │   HEDERA     │    │
+│  │  (Sentinel)  │    │   (Groq)     │    │   (HCS)      │    │
+│  └──────────────┘    └──────────────┘    └──────────────┘    │
+│         │                                       │              │
+│         │                    ┌─────────────────┘              │
 │         │                    ▼                                   │
 │         │            ┌──────────────┐                            │
-│         └───────────▶│  ROOTSTOCK   │◀── Smart Contract          │
-│                      │    (RSK)     │    VitisRegistry          │
-│                      └──────────────┘                            │
+│         └───────────▶│  ROOTSTOCK   │◀── Smart Contract            │
+│                      │    (RSK)     │    VitisRegistry            │
+│                      └──────────────┘                              │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🔄 Flujo de Auditoría Completo
+## 🔄 Flujo de Auditoría
 
-```mermaid
+```
 1.Usuario         Pide verificación con:
-  llama           lat, lon, asset_address, token_id
-     │
-     ▼
+  Frontend         lat, lon, asset_address, token_id
+      │
+      ▼
 2.Perception      Consulta Sentinel Hub para obtener
   Agent           datos NDVI de las coordenadas
-     │
-     ▼
+      │
+      ▼
 3.Reasoning      Envía NDVI a Groq (Llama 3.3)
   Agent           Obtiene VitisScore, risk, justification
-     │
-     ▼
+      │
+      ▼
 4.Protocol        Notariza el reporte en Hedera HCS
   Agent           Topic: 0.0.8386842
-     │
-     ▼
+      │
+      ▼
 5.Backend         Firma transacción en Rootstock
   (main.py)       certifyAsset() en VitisRegistry
-     │
-     ▼
-6.Usuario         Recibe:
-  recibe          - vitis_score (0-100)
-                  - risk (low/moderate/high)
-                  - justification
-                  - hedera_notarization (SUCCESS)
-                  - rsk_tx_hash
-                  - status: ASSET_CERTIFIED
+      │
+      ▼
+6.Usuario         Recibe certificación completa
 ```
 
 ---
@@ -98,19 +91,21 @@ El resultado: un historial auditable que nadie puede falsificar.
 ```
 vitistrust/
 ├── agents/                      # Agentes de IA
-│   ├── perception_agent.py      # Satélite: Sentinel Hub → NDVI
-│   ├── reasoning_agent.py      # IA: Groq → VitisScore
-│   └── protocol_agent.py       # Hedera: HCS → Notarización
+│   ├── perception_agent.py    # Satélite: Sentinel Hub → NDVI
+│   ├── reasoning_agent.py      # IA: Groq → VitisScore + Investment Analysis
+│   ├── protocol_agent.py       # Hedera: HCS → Notarización
+│   └── validation_agent.py     # Validación: geolocalización, vegetation, ERC-721
 ├── backend/
-│   ├── main.py                 # FastAPI: Endpoints del oráculo
-│   └── constants.py            # ABI del contrato VitisRegistry
+│   ├── main.py                # FastAPI: Endpoints del oráculo
+│   └── constants.py           # ABI del contrato VitisRegistry
+├── frontend-react/             # React frontend
+│   └── src/App.jsx            # Interfaz de usuario
 ├── contracts/
 │   └── VitisRegistry.sol       # Smart Contract en RSK
 ├── scripts/
-│   └── deploy_rsk.py           # Deploy del contrato
-├── .env                        # Configuración (NOコミット)
-├── requirements.txt             # Dependencias Python
-├── AGENTS.md                   # Guía para agentes IA
+│   └── deploy_rsk.py          # Deploy del contrato
+├── .env                       # Configuración (NOコミット)
+├── requirements.txt            # Dependencias Python
 └── README.md                   # Este archivo
 ```
 
@@ -130,7 +125,7 @@ vitistrust/
 
 ```bash
 # Auditar un viñedo
-curl "http://localhost:8000/verify-vineyard?lat=-33.1254&lon=-68.8942&asset_address=0x5B38Da6a701C568545dCfcB03FcB875f56beddC4&token_id=1"
+curl "http://localhost:8000/verify-vineyard?lat=-33.1254&lon=-68.8942&asset_address=0xTU_ADDRESS&token_id=1"
 
 # Respuesta:
 {
@@ -139,11 +134,16 @@ curl "http://localhost:8000/verify-vineyard?lat=-33.1254&lon=-68.8942&asset_addr
   "justification": "El NDVI de 0.75 indica excelente salud vegetativa...",
   "hedera_notarization": "SUCCESS",
   "rsk_tx_hash": "0xabc123...",
-  "status": "ASSET_CERTIFIED"
+  "status": "ASSET_CERTIFIED",
+  "investment_analysis": {
+    "recommendation": "BUY",
+    "risk_score": 20,
+    "yield_forecast": "10-12 tons/ha"
+  }
 }
 
 # Consultar certificación previa
-curl "http://localhost:8000/certificate/0x5B38Da6a701C568545dCfcB03FcB875f56beddC4/1"
+curl "http://localhost:8000/certificate/0xTU_ADDRESS/1"
 
 # Verificar salud del oráculo
 curl "http://localhost:8000/health"
@@ -158,22 +158,21 @@ curl "http://localhost:8000/health"
 ```bash
 # ===== ROOTSTOCK (RSK) =====
 RSK_RPC_URL=https://public-node.testnet.rsk.co
-RSK_PRIVATE_KEY=dd99edbb6aeedaae076e3797b018fe38bc090e356668fa854ee2026cda45ec6e
-RSK_ORACLE_ADDRESS=0x1e9423e4651CB859C38e075598d8d75DCA2Df0E0
+RSK_PRIVATE_KEY=tu_private_key
+RSK_ORACLE_ADDRESS=tu_direccion
 RSK_CONTRACT_ADDRESS=0x1418344A54a065987B991574632CBd36114e308d
 
 # ===== HEDERA / HIERO =====
-HEDERA_ACCOUNT_ID=0.0.8384975
-HEDERA_PRIVATE_KEY=436db4f9f8d4101fc0708cd79d36169ccfb63a14bf62a80423a29b5a51491a6b
-HEDERA_DER_PRIVATE_KEY=3030020100300706052b8104000a04220420436db4f9f8d4101fc0708cd79d36169ccfb63a14bf62a80423a29b5a51491a6b
-HEDERA_TOPIC_ID=0.0.8386842
+HEDERA_ACCOUNT_ID=0.0.xxxxxx
+HEDERA_DER_PRIVATE_KEY=3030020100300706052b8104000a04220420...
+HEDERA_TOPIC_ID=0.0.xxxxxx
 
 # ===== SATÉLITE =====
-PLANET_API_KEY=PLAK9b267639c45e42eb8391729123abb5b4
+SENTINEL_CLIENT_ID=tu_client_id
+SENTINEL_CLIENT_SECRET=tu_client_secret
 
 # ===== IA (GROQ) =====
-AI_API_KEY=gsk_...
-AI_MODEL=llama-3.3-70b-versatile
+AI_API_KEY=tu_api_key
 ```
 
 ---
@@ -187,7 +186,6 @@ git clone https://github.com/tu-repo/vitistrust.git
 cd vitistrust
 python -m venv venv
 venv\Scripts\activate  # Windows
-# source venv/bin/activate  # Linux/Mac
 
 pip install -r requirements.txt
 ```
@@ -196,25 +194,18 @@ pip install -r requirements.txt
 
 Copiar el ejemplo anterior y completar con tus claves.
 
-### 3. Desplegar contrato (primera vez)
-
-```bash
-python scripts/deploy_rsk.py
-```
-
-Esto desplegará `VitisRegistry.sol` a Rootstock Testnet y te dará la dirección del contrato.
-
-### 4. Levantar el servidor
+### 3. Levantar el servidor
 
 ```bash
 python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### 5. Auditar un viñedo
+### 4. Frontend
 
 ```bash
-# Con curl
-curl "http://localhost:8000/verify-vineyard?lat=-33.1254&lon=-68.8942&asset_address=0xTU_ADDRESS&token_id=1"
+cd frontend-react
+npm install
+npm run dev
 ```
 
 ---
@@ -224,15 +215,15 @@ curl "http://localhost:8000/verify-vineyard?lat=-33.1254&lon=-68.8942&asset_addr
 | Capa | Tecnología | Propósito |
 |------|------------|-----------|
 | API | FastAPI + Uvicorn | Servidor REST |
-| Satélite | Sentinel Hub (ESA) | Imágenes multiespectrales |
-| IA | Groq (Llama 3.3) | Análisis de datos |
+| Satélite | Sentinel Hub (ESA) | Imágenes multiespectrales (NDVI) |
+| IA | Groq (Llama 3.3) | Análisis de datos + Investment Analysis |
 | Blockchain 1 | Hedera (HCS) | Notarización inmutable |
 | Blockchain 2 | Rootstock (RSK) | Smart Contracts (EVM) |
-| Web3 | web3.py | Interacción con RSK |
+| Frontend | React + Vite | Interfaz de usuario |
 
 ---
 
-## 📋 Contrato Inteligente
+## 📋 Smart Contract
 
 ### VitisRegistry.sol (Rootstock)
 
@@ -242,15 +233,13 @@ pragma solidity ^0.8.20;
 
 contract VitisRegistry {
     struct Certificate {
-        uint256 score;      // VitisScore (0-100)
-        uint256 timestamp;  // Timestamp de la auditoría
-        string hederaTopic; // Topic ID de Hedera
+        uint256 score;
+        uint256 timestamp;
+        string hederaTopic;
     }
     
-    // Mapping: asset address + token id => Certificate
     mapping(address => mapping(uint256 => Certificate)) public certificates;
     
-    // Función que el oráculo llama para certificar
     function certifyAsset(
         address assetContract,
         uint256 tokenId,
@@ -272,41 +261,9 @@ contract VitisRegistry {
 
 ### Hedera (HashScan)
 - Topic: https://testnet.hashscan.io/topic/0.0.8386842
-- Messages: Todos los reportes de auditoría
 
 ### Rootstock (RSK Explorer)
 - Contrato: https://explorer.testnet.rsk.co/address/0x1418344A54a065987B991574632CBd36114e308d
-- Transacciones: Ver el tx_hash en la respuesta
-
----
-
-## 🧪 Testing
-
-### Smart Contracts (Foundry)
-
-```bash
-# Instalar dependencias
-forge install
-
-# Correr tests
-forge test
-
-# Tests con verbose
-forge test -vvv
-```
-
-### Backend (Python)
-
-```bash
-# Correr tests
-pytest
-
-# Tests con verbose
-pytest -v
-
-# Coverage
-pytest --cov=. --cov-report=html
-```
 
 ---
 
@@ -314,57 +271,28 @@ pytest --cov=. --cov-report=html
 
 **VitisTrust resuelve un problema real:**
 
-En la tokenización de viñedos, el inversor no puede verificar si el activo subyacente 
+En la tokenización de viñedos, el inversor no puede verificar si el activo subyacente
 realmente existe y está sano. VitisTrust resolve este problema:
 
 1. **Satélite + IA**: Datos objetivos, no manipulables
-2. **双重 blockchain**: Hedera para consenso + Rootstock para seguridad Bitcoin
+2. **Doble blockchain**: Hedera para consenso + Rootstock para seguridad Bitcoin
 3. **Inmutable**: Cada auditoría queda registrada para siempre
 4. **Descentralizado**: Nadie puede falsificar un certificado
+5. **Análisis de Inversión**: BUY/HOLD/SELL para inversores
 
 > "VitisTrust trae transparencia verificable al mercado de vinos tokenizados."
+
+---
 
 ## 🏆 Estado del Proyecto
 
 | Componente | Estado |
 |------------|--------|
-| Smart Contract | ✅ Tests pasando (14/14) |
-| Backend API | ✅ Retry logic + errores |
-| Frontend | ✅ React + MetaMask |
-| Tests Python | ✅ 11 tests pasando |
-| Demo en vivo | ✅ Listo para ejecutar |
-
----
-
-## 🚀 Demo en Vivo
-
-### Prerequisites
-- Backend corriendo: `python -m uvicorn backend.main:app --reload`
-- Frontend corriendo: `cd frontend-react && npm run dev`
-- MetaMask instalado y conectado a RSK Testnet
-
-### Ejecutar Verificación
-
-1. Abrir http://localhost:5173
-2. Conectar wallet (MetaMask)
-3. Ingresar coordenadas de viñedo:
-   - **Latitud**: -32.8895 (Mendoza, Argentina)
-   - **Longitud**: -68.8458
-4. Ingresar Asset Address y Token ID
-5. Click en "Run Verification"
-
-### Respuesta Esperada
-
-```json
-{
-  "vitis_score": 75,
-  "risk": "low",
-  "justification": "El NDVI de 0.75 indica...",
-  "hedera_notarization": "SUCCESS",
-  "rsk_tx_hash": "0x...",
-  "status": "ASSET_CERTIFIED"
-}
-```
+| Smart Contract | ✅ Desplegado en RSK Testnet |
+| Backend API | ✅ Funcionando |
+| Frontend | ✅ React sin wallet |
+| Hedera HCS | ✅ Notarización activa |
+| Análisis IA | ✅ Investment Analysis |
 
 ---
 

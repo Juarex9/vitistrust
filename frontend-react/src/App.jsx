@@ -1,8 +1,5 @@
-import { useState, useEffect } from 'react'
-import { ethers } from 'ethers'
+import { useState } from 'react'
 import './index.css'
-
-const RSK_TESTNET_CHAIN_ID = '0x1f'
 
 const translations = {
   en: {
@@ -17,7 +14,9 @@ const translations = {
       lon: 'Longitude',
       asset: 'Asset Address',
       token: 'Token ID',
-      button: 'Run Verification'
+      button: 'Run Verification',
+      tabVerify: 'New Audit',
+      tabCheck: 'Verify Certificate'
     },
     result: {
       status: 'CERTIFIED',
@@ -26,7 +25,14 @@ const translations = {
       hedera: 'Hedera Topic',
       tx: 'RSK TX',
       loading: 'Verifying...',
-      error: 'Verification Failed'
+      error: 'Verification Failed',
+      existing: 'EXISTING CERTIFICATE'
+    },
+    investment: {
+      title: 'Investment Analysis',
+      recommendation: 'Recommendation',
+      yieldForecast: 'Yield Forecast',
+      confidence: 'Confidence'
     },
     stats: {
       satellites: 'Satellites',
@@ -40,13 +46,6 @@ const translations = {
     footer: {
       network: 'Hedera + Rootstock Testnet',
       rights: '© 2026 VitisTrust'
-    },
-    wallet: {
-      connect: 'Connect',
-      connecting: 'Connecting...',
-      disconnect: 'Disconnect',
-      wrongNetwork: 'Wrong Network',
-      connected: 'Connected'
     }
   },
   es: {
@@ -61,7 +60,9 @@ const translations = {
       lon: 'Longitud',
       asset: 'Dirección del Activo',
       token: 'ID de Token',
-      button: 'Ejecutar Verificación'
+      button: 'Ejecutar Verificación',
+      tabVerify: 'Nueva Auditoría',
+      tabCheck: 'Verificar Certificado'
     },
     result: {
       status: 'CERTIFICADO',
@@ -70,7 +71,14 @@ const translations = {
       hedera: 'Tópico Hedera',
       tx: 'TX RSK',
       loading: 'Verificando...',
-      error: 'Verificación Fallida'
+      error: 'Verificación Fallida',
+      existing: 'CERTIFICADO EXISTENTE'
+    },
+    investment: {
+      title: 'Análisis de Inversión',
+      recommendation: 'Recomendación',
+      yieldForecast: 'Rendimiento Estimado',
+      confidence: 'Confianza'
     },
     stats: {
       satellites: 'Satélites',
@@ -84,27 +92,8 @@ const translations = {
     footer: {
       network: 'Hedera + Rootstock Testnet',
       rights: '© 2026 VitisTrust'
-    },
-    wallet: {
-      connect: 'Conectar',
-      connecting: 'Conectando...',
-      disconnect: 'Desconectar',
-      wrongNetwork: 'Red Incorrecta',
-      connected: 'Conectado'
     }
   }
-}
-
-const RSK_TESTNET_PARAMS = {
-  chainId: RSK_TESTNET_CHAIN_ID,
-  chainName: 'Rootstock Testnet',
-  nativeCurrency: {
-    name: 'RBTC',
-    symbol: 'RBTC',
-    decimals: 18
-  },
-  rpcUrls: ['https://public-node.testnet.rsk.co'],
-  blockExplorerUrls: ['https://explorer.testnet.rsk.co']
 }
 
 function App() {
@@ -113,105 +102,17 @@ function App() {
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [statusType, setStatusType] = useState('idle')
-  
-  const [wallet, setWallet] = useState({
-    connected: false,
-    address: null,
-    connecting: false,
-    wrongNetwork: false
-  })
+  const [mode, setMode] = useState('verify')
   
   const t = translations[lang]
 
-  useEffect(() => {
-    checkWalletConnection()
-    if (window.ethereum) {
-      window.ethereum.on('chainChanged', handleChainChanged)
-      window.ethereum.on('accountsChanged', handleAccountsChanged)
-    }
-    return () => {
-      if (window.ethereum) {
-        window.ethereum.removeListener('chainChanged', handleChainChanged)
-        window.ethereum.removeListener('accountsChanged', handleAccountsChanged)
-      }
-    }
-  }, [])
-
-  const checkWalletConnection = async () => {
-    if (!window.ethereum) return
-    
-    try {
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      const accounts = await provider.listAccounts()
-      if (accounts.length > 0) {
-        const network = await provider.getNetwork()
-        setWallet({
-          connected: true,
-          address: accounts[0].address,
-          connecting: false,
-          wrongNetwork: network.chainId !== 31n
-        })
-      }
-    } catch (err) {
-      console.error('Error checking wallet:', err)
-    }
-  }
-
-  const handleChainChanged = (chainId) => {
-    const isRSK = parseInt(chainId, 16) === 31
-    setWallet(prev => ({ ...prev, wrongNetwork: !isRSK }))
-  }
-
-  const handleAccountsChanged = (accounts) => {
-    if (accounts.length === 0) {
-      setWallet({ connected: false, address: null, connecting: false, wrongNetwork: false })
-    } else {
-      setWallet(prev => ({ ...prev, address: accounts[0] }))
-    }
-  }
-
-  const connectWallet = async () => {
-    if (!window.ethereum) {
-      alert('MetaMask not installed. Please install MetaMask to use this feature.')
-      return
-    }
-
-    setWallet(prev => ({ ...prev, connecting: true }))
-
-    try {
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      await provider.send('eth_requestAccounts', [])
-      
-      const network = await provider.getNetwork()
-      const isRSK = network.chainId === 31n
-
-      if (!isRSK) {
-        try {
-          await provider.send('wallet_switchEthereumChain', [{ chainId: RSK_TESTNET_CHAIN_ID }])
-        } catch {
-          await provider.send('wallet_addEthereumChain', [RSK_TESTNET_PARAMS])
-        }
-      }
-
-      const accounts = await provider.listAccounts()
-      setWallet({
-        connected: true,
-        address: accounts[0].address,
-        connecting: false,
-        wrongNetwork: false
-      })
-    } catch (err) {
-      console.error('Error connecting wallet:', err)
-      setWallet(prev => ({ ...prev, connecting: false }))
-    }
-  }
-
-  const disconnectWallet = () => {
-    setWallet({ connected: false, address: null, connecting: false, wrongNetwork: false })
-  }
-
-  const shortenAddress = (addr) => {
-    return `${addr.slice(0, 6)}...${addr.slice(-4)}`
+  const getRiskColor = (risk) => {
+    if (!risk) return '#6b7280'
+    const r = risk.toLowerCase()
+    if (r === 'low') return '#10b981'
+    if (r === 'medium') return '#f59e0b'
+    if (r === 'high') return '#f43f5e'
+    return '#6b7280'
   }
 
   const handleSubmit = async (e) => {
@@ -228,9 +129,14 @@ function App() {
     setStatusType('loading')
 
     try {
-      const response = await fetch(
-        `http://localhost:8000/verify-vineyard?lat=${lat}&lon=${lon}&asset_address=${assetAddress}&token_id=${tokenId}`
-      )
+      let url
+      if (mode === 'check') {
+        url = `http://localhost:8000/certificate/${assetAddress}/${tokenId}`
+      } else {
+        url = `http://localhost:8000/verify-vineyard?lat=${lat}&lon=${lon}&asset_address=${assetAddress}&token_id=${tokenId}`
+      }
+      
+      const response = await fetch(url)
       
       if (!response.ok) {
         const errData = await response.json()
@@ -255,40 +161,22 @@ function App() {
       <div className="content">
         <header>
           <div className="logo">
-            <div className="logo-icon">⬡</div>
+            <div className="logo-icon">🍇</div>
             <span className="logo-text">VitisTrust</span>
-            <span className="logo-version">v1.0</span>
+            <span className="logo-version">v2.0</span>
           </div>
           
           <div className="header-right">
-            {wallet.connected ? (
-              <div className="wallet-info">
-                <span className={`wallet-badge ${wallet.wrongNetwork ? 'wrong-network' : 'connected'}`}>
-                  {wallet.wrongNetwork ? t.wallet.wrongNetwork : t.wallet.connected}
-                </span>
-                <span className="wallet-address">{shortenAddress(wallet.address)}</span>
-                <button className="wallet-btn disconnect" onClick={disconnectWallet} aria-label="Disconnect wallet">
-                  ×
-                </button>
-              </div>
-            ) : (
-              <button className="wallet-btn connect" onClick={connectWallet} disabled={wallet.connecting}>
-                {wallet.connecting ? t.wallet.connecting : t.wallet.connect}
-              </button>
-            )}
-            
             <div className="lang-toggle">
               <button 
                 className={`lang-btn ${lang === 'en' ? 'active' : ''}`}
                 onClick={() => setLang('en')}
-                aria-label="English"
               >
                 EN
               </button>
               <button 
                 className={`lang-btn ${lang === 'es' ? 'active' : ''}`}
                 onClick={() => setLang('es')}
-                aria-label="Español"
               >
                 ES
               </button>
@@ -376,16 +264,37 @@ function App() {
                   <div className="form-title">{t.form.title}</div>
                   <div className="form-subtitle">{t.form.subtitle}</div>
 
+                  <div className="mode-tabs">
+                    <button 
+                      type="button"
+                      className={`mode-tab ${mode === 'verify' ? 'active' : ''}`}
+                      onClick={() => { setMode('verify'); setResult(null); setError(null); }}
+                    >
+                      {t.form.tabVerify}
+                    </button>
+                    <button 
+                      type="button"
+                      className={`mode-tab ${mode === 'check' ? 'active' : ''}`}
+                      onClick={() => { setMode('check'); setResult(null); setError(null); }}
+                    >
+                      {t.form.tabCheck}
+                    </button>
+                  </div>
+
                   <form onSubmit={handleSubmit}>
                     <div className="form-grid">
-                      <div className="form-group">
-                        <label htmlFor="lat">{t.form.lat}</label>
-                        <input type="text" id="lat" name="lat" placeholder="40.4123" required />
-                      </div>
-                      <div className="form-group">
-                        <label htmlFor="lon">{t.form.lon}</label>
-                        <input type="text" id="lon" name="lon" placeholder="-3.6912" required />
-                      </div>
+                      {mode === 'verify' && (
+                        <>
+                          <div className="form-group">
+                            <label htmlFor="lat">{t.form.lat}</label>
+                            <input type="text" id="lat" name="lat" placeholder="-33.4942" required />
+                          </div>
+                          <div className="form-group">
+                            <label htmlFor="lon">{t.form.lon}</label>
+                            <input type="text" id="lon" name="lon" placeholder="-69.2429" required />
+                          </div>
+                        </>
+                      )}
                       <div className="form-group full-width">
                         <label htmlFor="assetAddress">{t.form.asset}</label>
                         <input type="text" id="assetAddress" name="assetAddress" placeholder="0x..." required />
@@ -415,40 +324,119 @@ function App() {
                     <div className="result-header">
                       <span className={`result-status ${statusType}`}>
                         {statusType === 'loading' && t.result.loading}
-                        {statusType === 'success' && t.result.status}
+                        {statusType === 'success' && (mode === 'check' ? t.result.existing : t.result.status)}
                         {statusType === 'error' && t.result.error}
                       </span>
                     </div>
 
                     {result && (
-                      <>
-                        <div className="score-section">
-                          <div className="score-value">{result.vitis_score}</div>
-                          <div className="score-label">{t.result.score}</div>
-                        </div>
-
-                        <div className="result-details">
-                          <div className="detail-row">
-                            <span className="detail-label">{t.result.risk}</span>
-                            <span className="detail-value">{result.risk?.toUpperCase()}</span>
+                      <div className="audit-dashboard">
+                        {mode === 'check' ? (
+                          <div className="existing-cert">
+                            <div className="cert-details">
+                              <div className="cert-score">
+                                <span className="cert-score-value">{result.vitis_score}</span>
+                                <span className="cert-score-label">{t.result.score}</span>
+                              </div>
+                              <div className="cert-info">
+                                <div className="cert-row">
+                                  <span className="cert-label">Asset</span>
+                                  <span className="cert-value">{result.asset_address}</span>
+                                </div>
+                                <div className="cert-row">
+                                  <span className="cert-label">Token ID</span>
+                                  <span className="cert-value">#{result.token_id}</span>
+                                </div>
+                                <div className="cert-row">
+                                  <span className="cert-label">Timestamp</span>
+                                  <span className="cert-value">{result.timestamp}</span>
+                                </div>
+                                <div className="cert-row">
+                                  <span className="cert-label">Hedera Topic</span>
+                                  <span className="cert-value">{result.hedera_topic_id}</span>
+                                </div>
+                              </div>
+                            </div>
                           </div>
-                          <div className="detail-row">
-                            <span className="detail-label">{t.result.hedera}</span>
-                            <span className="detail-value">{result.hedera_notarization}</span>
+                        ) : (
+                          <div className="new-audit-result">
+                            <div className="technical-view">
+                              <div className="satellite-container">
+                                <div className="scan-line"></div>
+                                <img src={result.satellite_img} alt="Satellite NDVI Analysis" className="satellite-img" />
+                                <div className="overlay-tag top-left">SENTINEL-2 L2A</div>
+                                <div className="overlay-tag bottom-right">MZA_{result.vitis_score}_NDVI</div>
+                                <div className="map-legend">
+                                  <div className="legend-item"><span className="dot green"></span> 0.7+ High</div>
+                                  <div className="legend-item"><span className="dot yellow"></span> 0.4+ Mod</div>
+                                  <div className="legend-item"><span className="dot red"></span> 0.2- Stress</div>
+                                </div>
+                              </div>
+                              <div className="main-score-card">
+                                <div className="score-circle" style={{ borderColor: getRiskColor(result.risk) }}>
+                                  <span className="score-value">{result.vitis_score}</span>
+                                  <span className="score-label">VitisScore</span>
+                                </div>
+                                <div className="risk-badge" style={{ backgroundColor: getRiskColor(result.risk) }}>
+                                  {result.risk?.toUpperCase()} RISK
+                                </div>
+                              </div>
+                            </div>
+                            <div className="quick-validation-grid">
+                              <div className={`val-pill ${result.validation?.geolocation?.valid ? 'ok' : 'warn'}`}>
+                                📍 {result.validation?.geolocation?.region || 'Geo Valid'}
+                              </div>
+                              <div className={`val-pill ${result.validation?.vegetation?.valid ? 'ok' : 'warn'}`}>
+                                🌿 NDVI: {result.ndvi?.toFixed(3)}
+                              </div>
+                              <div className="val-pill ok">🛡️ Hedera Notarized</div>
+                            </div>
+                            {result.investment_analysis && (
+                              <div className="investment-analysis-panel">
+                                <div className="investment-header">
+                                  <h3>{t.investment.title}</h3>
+                                  <span className={`recommendation-label ${result.investment_analysis.recommendation?.toLowerCase()}`}>
+                                    {result.investment_analysis.recommendation}
+                                  </span>
+                                </div>
+                                <p className="ai-justification">"{result.justification}"</p>
+                                <div className="investment-stats-grid">
+                                  <div className="i-stat">
+                                    <span className="i-label">{t.investment.yieldForecast}</span>
+                                    <span className="i-value">{result.investment_analysis.yield_forecast}</span>
+                                  </div>
+                                  <div className="i-stat">
+                                    <span className="i-label">{t.investment.confidence}</span>
+                                    <span className="i-value">{result.investment_analysis.confidence}</span>
+                                  </div>
+                                  <div className="i-stat">
+                                    <span className="i-label">Trend</span>
+                                    <span className="i-value">{result.investment_analysis.price_trend}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                            <div className="blockchain-proofs">
+                              <div className="proof-item">
+                                <span className="p-icon">◈</span>
+                                <div className="p-data">
+                                  <span className="p-label">Hedera Topic ID</span>
+                                  <span className="p-hash">{result.hedera_notarization}</span>
+                                </div>
+                              </div>
+                              <div className="proof-item">
+                                <span className="p-icon">⬡</span>
+                                <div className="p-data">
+                                  <span className="p-label">Rootstock Transaction</span>
+                                  <a href={`https://explorer.testnet.rsk.co/tx/${result.rsk_tx_hash}`} target="_blank" className="p-link">
+                                    {result.rsk_tx_hash?.substring(0, 16)}...
+                                  </a>
+                                </div>
+                              </div>
+                            </div>
                           </div>
-                          <div className="detail-row">
-                            <span className="detail-label">{t.result.tx}</span>
-                            <a 
-                              href={`https://explorer.testnet.rsk.co/tx/${result.rsk_tx_hash}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="tx-link"
-                            >
-                              {result.rsk_tx_hash?.substring(0, 12)}...
-                            </a>
-                          </div>
-                        </div>
-                      </>
+                        )}
+                      </div>
                     )}
 
                     {error && (
@@ -472,7 +460,7 @@ function App() {
                   </div>
                   <div className="info-item">
                     <span className="info-key">AI Model</span>
-                    <span className="info-val">DeepSeek-R1</span>
+                    <span className="info-val">Groq LLMs</span>
                   </div>
                   <div className="info-item">
                     <span className="info-key">Endpoint</span>
@@ -496,8 +484,8 @@ function App() {
                     <span className="info-val">0 - 100</span>
                   </div>
                   <div className="info-item">
-                    <span className="info-key">Update</span>
-                    <span className="info-val">Real-time</span>
+                    <span className="info-key">Region</span>
+                    <span className="info-val">Mendoza</span>
                   </div>
                 </div>
               </div>

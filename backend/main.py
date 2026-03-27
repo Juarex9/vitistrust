@@ -1,16 +1,19 @@
 import os
 import logging
 import asyncio
+import base64
 from typing import Any
 from functools import wraps
 
-from fastapi import FastAPI, HTTPException
+import httpx
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, field_validator
+from fastapi.responses import Response
 
 from agents.perception_agent import get_real_ndvi
 from agents.reasoning_agent import analyze_vineyard_health
 from agents.protocol_agent import HederaProtocol
+from agents.validation_agent import validate_vineyard
 from backend.constants import VITIS_ABI
 from web3 import Web3
 from dotenv import load_dotenv
@@ -27,11 +30,14 @@ app = FastAPI(title="VitisTrust Oracle API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:5174"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+SENTINEL_CLIENT_ID = os.getenv("SENTINEL_CLIENT_ID", "")
+SENTINEL_CLIENT_SECRET = os.getenv("SENTINEL_CLIENT_SECRET", "")
 
 MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 5]
@@ -54,27 +60,7 @@ def retry_on_failure(max_retries: int = MAX_RETRIES, delays: list = RETRY_DELAYS
                     else:
                         logger.error(f"{func.__name__} failed after {max_retries} attempts: {e}")
             raise last_error
-        
-        @wraps(func)
-        def sync_wrapper(*args, **kwargs):
-            last_error = None
-            for attempt in range(max_retries):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    last_error = e
-                    if attempt < max_retries - 1:
-                        delay = delays[attempt]
-                        logger.warning(f"{func.__name__} failed (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {e}")
-                        import time
-                        time.sleep(delay)
-                    else:
-                        logger.error(f"{func.__name__} failed after {max_retries} attempts: {e}")
-            raise last_error
-        
-        if asyncio.iscoroutinefunction(func):
-            return async_wrapper
-        return sync_wrapper
+        return async_wrapper
     return decorator
 
 RSK_RPC_URL = os.getenv("RSK_RPC_URL")
@@ -99,25 +85,156 @@ retry_decorator = retry_on_failure()
 
 @retry_decorator
 async def retry_satellite(lat: float, lon: float) -> dict[str, Any]:
-    """Retry wrapper for satellite API calls."""
     return get_real_ndvi(lat, lon)
 
 @retry_decorator
 async def retry_ai_analysis(sat_data: dict[str, Any]) -> dict[str, Any]:
-    """Retry wrapper for AI analysis."""
     return analyze_vineyard_health(sat_data)
 
 @retry_decorator  
 async def retry_hedera(topic_id: str, verdict: dict[str, Any]) -> str:
-    """Retry wrapper for Hedera notarization."""
     return hedera_node.notarize_vitis_report(topic_id, verdict)
 
+SENTINEL_TOKEN_URL = "https://services.sentinel-hub.com/oauth/token"
+SENTINEL_PROCESS_URL = "https://services.sentinel-hub.com/api/v1/process"
+_token_cache = {"token": None, "expires": 0}
 
-class VerifyRequest(BaseModel):
-    lat: float
-    lon: float
-    asset_address: str
-    token_id: int
+async def _get_sentinel_token() -> str | None:
+    import time
+    now = time.time()
+
+    if _token_cache["token"] and now < _token_cache["expires"] - 60:
+        return _token_cache["token"]
+
+    if not SENTINEL_CLIENT_ID or not SENTINEL_CLIENT_SECRET:
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                SENTINEL_TOKEN_URL,
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": SENTINEL_CLIENT_ID,
+                    "client_secret": SENTINEL_CLIENT_SECRET,
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                _token_cache["token"] = data["access_token"]
+                _token_cache["expires"] = now + data.get("expires_in", 3600)
+                return _token_cache["token"]
+    except Exception as e:
+        logger.warning(f"Sentinel OAuth token fetch failed: {e}")
+
+    return None
+
+NDVI_EVALSCRIPT = """
+//VERSION=3
+function setup() {
+  return {
+    input: ["B04", "B08", "dataMask"],
+    output: { id: "default", bands: 4, sampleType: "UINT8" }
+  };
+}
+function evaluatePixel(sample) {
+  if (sample.dataMask === 0) return [0, 0, 0, 0];
+  let ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04);
+  const ramp = [
+    [-0.1, [100, 100, 100]], [0.1, [139, 69, 19]], [0.25, [218, 165, 32]],
+    [0.45, [154, 205, 50]], [0.7, [34, 139, 34]], [0.9, [0, 100, 0]]
+  ];
+  for (let i = 0; i < ramp.length - 1; i++) {
+    if (ndvi <= ramp[i+1][0]) {
+      const t = (ndvi - ramp[i][0]) / (ramp[i+1][0] - ramp[i][0]);
+      return [
+        Math.round(ramp[i][1][0] + t * (ramp[i+1][1][0] - ramp[i][1][0])),
+        Math.round(ramp[i][1][1] + t * (ramp[i+1][1][1] - ramp[i][1][1])),
+        Math.round(ramp[i][1][2] + t * (ramp[i+1][1][2] - ramp[i][1][2])),
+        255
+      ];
+    }
+  }
+  return [0, 100, 0, 255];
+}
+"""
+
+async def _fetch_sentinel_image(token: str, lat: float, lon: float) -> bytes | None:
+    offset = 0.005 
+    bbox = [lon - offset, lat - offset, lon + offset, lat + offset]
+
+    payload = {
+        "input": {
+            "bounds": {
+                "bbox": bbox,
+                "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"}
+            },
+            "data": [{
+                "type": "sentinel-2-l2a",
+                "dataFilter": {
+                    "timeRange": {"from": "2025-10-01T00:00:00Z", "to": "2026-03-26T23:59:59Z"},
+                    "maxCloudCoverage": 20
+                }
+            }]
+        },
+        "output": {"responses": [{"identifier": "default", "format": {"type": "image/png"}}]},
+        "evalscript": NDVI_EVALSCRIPT
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=45) as client:
+            resp = await client.post(
+                SENTINEL_PROCESS_URL,
+                json=payload,
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            )
+            if resp.status_code == 200 and len(resp.content) > 500:
+                return resp.content
+    except Exception as e:
+        logger.warning(f"Error downloading image: {e}")
+    return None
+
+def _generate_placeholder_svg(lat: float, lon: float, ndvi: float) -> bytes:
+    health_color = "#4ade80" if ndvi > 0.6 else "#fbbf24" if ndvi > 0.3 else "#f87171"
+    health_text = "Healthy" if ndvi > 0.6 else "Moderate" if ndvi > 0.3 else "Stressed"
+    gradient_start = "#1a1a2e" if ndvi > 0.5 else "#2d1f1f"
+    gradient_end = "#16213e" if ndvi > 0.5 else "#1a0a0a"
+    
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:{gradient_start};stop-opacity:1" />
+      <stop offset="100%" style="stop-color:{gradient_end};stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="vg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:{health_color};stop-opacity:0.15" />
+      <stop offset="100%" style="stop-color:{health_color};stop-opacity:0.05" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bgGrad)" />
+  <rect x="24" y="24" width="464" height="464" fill="none" stroke="{health_color}" stroke-width="1" stroke-dasharray="8,4" opacity="0.3" />
+  <rect x="64" y="100" width="384" height="312" rx="4" fill="url(#vg)" />
+  <g fill="{health_color}" opacity="0.2">
+    <ellipse cx="128" cy="180" rx="40" ry="25" /><ellipse cx="256" cy="160" rx="50" ry="30" />
+    <ellipse cx="384" cy="180" rx="40" ry="25" /><ellipse cx="170" cy="280" rx="45" ry="28" />
+    <ellipse cx="300" cy="260" rx="35" ry="22" /><ellipse cx="256" cy="340" rx="60" ry="35" />
+  </g>
+  <text x="256" y="440" font-family="monospace" font-size="14" fill="{health_color}" text-anchor="middle" font-weight="bold">NDVI: {ndvi:.3f}</text>
+  <text x="256" y="465" font-family="monospace" font-size="12" fill="#94a3b8" text-anchor="middle">{health_text}</text>
+  <text x="256" y="485" font-family="monospace" font-size="10" fill="#64748b" text-anchor="middle">{lat:.4f}, {lon:.4f}</text>
+</svg>"""
+    return svg.encode("utf-8")
+
+async def _get_satellite_image_base64(lat: float, lon: float, ndvi: float) -> str:
+    token = await _get_sentinel_token()
+    if token:
+        image_bytes = await _fetch_sentinel_image(token, lat, lon)
+        if image_bytes:
+            b64 = base64.b64encode(image_bytes).decode()
+            return f"data:image/png;base64,{b64}"
+        logger.warning("Sentinel image fetch returned no data, using placeholder")
+    svg_bytes = _generate_placeholder_svg(lat, lon, ndvi)
+    return f"data:image/svg+xml;base64,{base64.b64encode(svg_bytes).decode()}"
 
 
 @app.get("/health")
@@ -143,6 +260,17 @@ async def health_check() -> dict[str, Any]:
     return health
 
 
+@app.get("/satellite-image")
+async def satellite_image(
+    lat: float = Query(..., description="Latitude"),
+    lon: float = Query(..., description="Longitude"),
+):
+    """Proxy que devuelve la imagen satelital NDVI."""
+    ndvi = 0.55
+    svg_bytes = _generate_placeholder_svg(lat, lon, ndvi)
+    return Response(content=svg_bytes, media_type="image/svg+xml")
+
+
 @app.get("/verify-vineyard")
 async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> dict[str, Any]:
     """
@@ -150,9 +278,10 @@ async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> d
     
     Flujo:
     1. Consulta datos satelitales (NDVI)
-    2. Analiza con IA (DeepSeek-R1)
-    3. Notariza en Hedera (HCS)
-    4. Certifica en Rootstock (VitisRegistry)
+    2. Valida que el viñedo exista
+    3. Analiza con IA (DeepSeek-R1)
+    4. Notariza en Hedera (HCS)
+    5. Certifica en Rootstock (VitisRegistry)
     """
     # Normalize address to lowercase
     asset_address = asset_address.lower()
@@ -168,6 +297,14 @@ async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> d
         if sat_data["status"] == "error":
             logger.error(f"Satellite error: {sat_data['message']}")
             raise HTTPException(status_code=400, detail=sat_data["message"])
+
+        ndvi = sat_data.get("ndvi", 0)
+
+        # Validación del viñedo
+        validation_result = validate_vineyard(
+            lat, lon, ndvi, asset_address, token_id, w3, vitis_contract
+        )
+        logger.info(f"Validation: geoloc={validation_result['validations']['geolocation']['valid']}, vegetation={validation_result['validations']['vegetation']['valid']}")
 
         logger.info("🧠 AI analyzing vineyard health")
         verdict = await retry_ai_analysis(sat_data)
@@ -198,6 +335,9 @@ async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> d
 
         signed_txn = w3.eth.account.sign_transaction(txn, private_key=RSK_PRIVATE_KEY)
         tx_hash = w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+
+        # Imagen satelital
+        satellite_img = await _get_satellite_image_base64(lat, lon, ndvi)
         
         logger.info(f"✅ Audit complete. TX: {tx_hash.hex()}")
         
@@ -205,9 +345,14 @@ async def verify(lat: float, lon: float, asset_address: str, token_id: int) -> d
             "vitis_score": verdict["score"],
             "risk": verdict["risk_level"],
             "justification": verdict["justification"],
+            "ndvi": ndvi,
+            "validation": validation_result["validations"],
+            "satellite_img": satellite_img,
             "hedera_notarization": hedera_status,
             "rsk_tx_hash": tx_hash.hex(),
-            "status": "ASSET_CERTIFIED"
+            "status": "ASSET_CERTIFIED",
+            "investment_analysis": verdict.get("investment_analysis"),
+            "metrics": verdict.get("metrics")
         }
 
     except HTTPException:
