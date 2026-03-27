@@ -4,8 +4,8 @@ services:
     region: oregon
     plan: free
     runtime: python
-    buildCommand: pip3 install --no-cache-dir -r backend/requirements.txt
-    startCommand: pip3 install -r backend/requirements.txt && python3 -m uvicorn main:app --host 0.0.0.0 --port $PORT
+    buildCommand: python -m pip install --upgrade pip && python -m pip install -r backend/requirements.txt
+    startCommand: python -m pip install -r backend/requirements.txt && python -m uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
       - key: RSK_RPC_URL
