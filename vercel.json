@@ -1,10 +1,9 @@
 {
   "framework": null,
-  "buildCommand": "npm install && npm run build",
-  "outputDirectory": "dist",
+  "buildCommand": "cd frontend-react && npm install && npm run build",
+    "outputDirectory": "dist",
   "devCommand": "npm run dev",
-  "rootDirectory": "frontend-react",
-    "rewrites": [
+  "rewrites": [
     {
       "source": "/api/(.*)",
       "destination": "https://vitistrust.onrender.com/$1"
