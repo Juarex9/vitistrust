@@ -1,6 +1,8 @@
 {
+  "framework": "vite",
   "buildCommand": "cd frontend-react && npm install && npm run build",
   "outputDirectory": "frontend-react/dist",
+  "installCommand": "echo 'No Python deps needed'",
   "rewrites": [
     {
       "source": "/api/(.*)",
