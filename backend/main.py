@@ -10,6 +10,7 @@ import asyncio
 import base64
 from typing import Any
 from functools import wraps
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
@@ -22,6 +23,7 @@ from agents.reasoning_agent import analyze_vineyard_health
 from agents.protocol_agent import HederaProtocol
 from agents.validation_agent import validate_vineyard
 from backend.stellar_adapter import create_stellar_adapter, SorobanAdapter
+from backend.time_window import build_time_window, format_iso_utc, parse_iso_datetime
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -267,42 +269,106 @@ async def _fetch_sentinel_image(
     lat: float,
     lon: float,
     evalscript: str = NDVI_EVALSCRIPT,
-    date_from: str = "2025-10-01T00:00:00Z",
-    date_to: str = "2026-03-26T23:59:59Z"
+    date_from: str | None = None,
+    date_to: str | None = None
 ) -> bytes | None:
     offset = 0.005
     bbox = [lon - offset, lat - offset, lon + offset, lat + offset]
 
-    payload = {
-        "input": {
-            "bounds": {
-                "bbox": bbox,
-                "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"}
-            },
-            "data": [{
-                "type": "sentinel-2-l2a",
-                "dataFilter": {
-                    "timeRange": {"from": date_from, "to": date_to},
-                    "maxCloudCoverage": 20
-                }
-            }]
-        },
-        "output": {"responses": [{"identifier": "default", "format": {"type": "image/png"}}]},
-        "evalscript": evalscript
-    }
+    requested_from, requested_to = (
+        (date_from, date_to) if date_from and date_to else build_time_window(180)
+    )
+    fallback_from, fallback_to = build_time_window(365)
+    windows: list[tuple[str, str, str]] = [
+        (requested_from, requested_to, "requested"),
+        (fallback_from, fallback_to, "fallback-expanded"),
+    ]
 
     try:
         async with httpx.AsyncClient(timeout=45) as client:
-            resp = await client.post(
-                SENTINEL_PROCESS_URL,
-                json=payload,
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            )
-            if resp.status_code == 200 and len(resp.content) > 500:
-                return resp.content
+            for current_from, current_to, window_label in windows:
+                logger.info(
+                    "Satellite image query window=%s from=%s to=%s lat=%s lon=%s",
+                    window_label,
+                    current_from,
+                    current_to,
+                    lat,
+                    lon,
+                )
+
+                payload = {
+                    "input": {
+                        "bounds": {
+                            "bbox": bbox,
+                            "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"}
+                        },
+                        "data": [{
+                            "type": "sentinel-2-l2a",
+                            "dataFilter": {
+                                "timeRange": {"from": current_from, "to": current_to},
+                                "maxCloudCoverage": 20
+                            }
+                        }]
+                    },
+                    "output": {"responses": [{"identifier": "default", "format": {"type": "image/png"}}]},
+                    "evalscript": evalscript
+                }
+
+                resp = await client.post(
+                    SENTINEL_PROCESS_URL,
+                    json=payload,
+                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                )
+                if resp.status_code == 200 and len(resp.content) > 500:
+                    return resp.content
+                logger.warning(
+                    "Sentinel image empty for window=%s from=%s to=%s status=%s size=%s",
+                    window_label,
+                    current_from,
+                    current_to,
+                    resp.status_code,
+                    len(resp.content),
+                )
     except Exception as e:
         logger.warning(f"Error downloading image: {e}")
     return None
+
+
+def _resolve_window(
+    date: str | None = None,
+    from_param: str | None = None,
+    to_param: str | None = None,
+) -> tuple[str, str]:
+    if from_param or to_param:
+        if not from_param or not to_param:
+            raise HTTPException(
+                status_code=422,
+                detail="Both 'from' and 'to' query params are required when overriding time window",
+            )
+        try:
+            parsed_from = parse_iso_datetime(from_param)
+            parsed_to = parse_iso_datetime(to_param)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid ISO datetime format for 'from'/'to': {exc}",
+            ) from exc
+
+        if parsed_from >= parsed_to:
+            raise HTTPException(
+                status_code=422,
+                detail="'from' must be earlier than 'to'",
+            )
+        return format_iso_utc(parsed_from), format_iso_utc(parsed_to)
+
+    if date:
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=UTC)
+            return build_time_window(days_back=60, end=target_date + timedelta(days=30))
+        except ValueError:
+            logger.warning("Invalid date format for /satellite-image date=%s, using default window", date)
+
+    return build_time_window(180)
 
 
 def _generate_placeholder_svg(lat: float, lon: float, ndvi: float, layer: str = "ndvi") -> bytes:
@@ -558,21 +624,12 @@ async def satellite_image(
     lon: float = Query(..., description="Longitude"),
     layer: str = Query("ndvi", description="Layer type: ndvi, ndmi, truecolor"),
     date: str = Query(None, description="Date for historical image (YYYY-MM-DD)"),
+    from_: str | None = Query(None, alias="from", description="ISO datetime start (e.g. 2026-01-01T00:00:00Z)"),
+    to: str | None = Query(None, description="ISO datetime end (e.g. 2026-04-20T23:59:59Z)"),
 ):
     """Proxy que devuelve la imagen satelital con diferentes capas."""
-    from datetime import datetime, timedelta
-
-    if date:
-        try:
-            target_date = datetime.strptime(date, "%Y-%m-%d")
-            date_from = (target_date - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            date_to = (target_date + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        except ValueError:
-            date_from = "2025-10-01T00:00:00Z"
-            date_to = "2026-03-26T23:59:59Z"
-    else:
-        date_from = "2025-10-01T00:00:00Z"
-        date_to = "2026-03-26T23:59:59Z"
+    date_from, date_to = _resolve_window(date=date, from_param=from_, to_param=to)
+    logger.info("satellite_image effective window from=%s to=%s lat=%s lon=%s", date_from, date_to, lat, lon)
 
     evalscript = NDVI_EVALSCRIPT
     if layer == "ndmi":
@@ -597,6 +654,8 @@ async def satellite_image(
 async def satellite_layers(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),
+    from_: str | None = Query(None, alias="from", description="ISO datetime start"),
+    to: str | None = Query(None, description="ISO datetime end"),
 ) -> dict[str, Any]:
     """Devuelve las diferentes capas satelitales (NDVI, NDMI, TrueColor)."""
     layers = {}
@@ -606,8 +665,8 @@ async def satellite_layers(
         "truecolor": TRUE_COLOR_EVALSCRIPT
     }
 
-    date_from = "2025-10-01T00:00:00Z"
-    date_to = "2026-03-26T23:59:59Z"
+    date_from, date_to = _resolve_window(from_param=from_, to_param=to)
+    logger.info("satellite_layers effective window from=%s to=%s lat=%s lon=%s", date_from, date_to, lat, lon)
 
     token = await _get_sentinel_token()
 
