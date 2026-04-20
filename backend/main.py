@@ -20,7 +20,8 @@ from pydantic import BaseModel
 from agents.perception_agent import get_real_ndvi
 from agents.reasoning_agent import analyze_vineyard_health
 from agents.protocol_agent import HederaProtocol
-from agents.validation_agent import validate_vineyard
+from agents.validation_agent import validate_geolocation, validate_vineyard
+from backend.benchmarks import compute_regional_benchmark, get_region_baseline, list_benchmarks
 from backend.stellar_adapter import create_stellar_adapter, SorobanAdapter
 from dotenv import load_dotenv
 
@@ -69,6 +70,7 @@ class AuditResponse(BaseModel):
     stellar_tx_hash: str
     hedera_txn_id: str
     status: str
+    regional_benchmark: dict[str, Any]
 
 # ============================================
 # Configuración
@@ -438,6 +440,12 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
         raise HTTPException(status_code=400, detail=sat_data["message"])
 
     ndvi = sat_data.get("ndvi", 0)
+    geolocation = validate_geolocation(request.lat, request.lon)
+    regional_benchmark = compute_regional_benchmark(
+        ndvi=ndvi,
+        region_key=geolocation.get("region_key"),
+        region_name=geolocation.get("region"),
+    )
 
     # 2. Validación (opcional - mantener si se usa asset_address)
     if request.asset_address and request.token_id:
@@ -447,6 +455,7 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
             request.asset_address, request.token_id,
             None, None  # Sin web3
         )
+        regional_benchmark = validation_result["validations"]["regional_benchmark"]
         logger.info(
             f"Validation: geoloc={validation_result['validations']['geolocation']['valid']}, "
             f"vegetation={validation_result['validations']['vegetation']['valid']}"
@@ -498,7 +507,8 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
         hedera_notarization=hedera_status,
         stellar_tx_hash=stellar_tx_hash,
         hedera_txn_id=hedera_txn_id,
-        status="ASSET_CERTIFIED"
+        status="ASSET_CERTIFIED",
+        regional_benchmark=regional_benchmark,
     )
 
 
@@ -546,6 +556,31 @@ async def get_certificate(farm_id: str) -> dict[str, Any]:
     except Exception as e:
         logger.error(f"Certificate query failed: {e}")
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/benchmarks/{region}")
+async def get_regional_benchmark(
+    region: str,
+    ndvi: float | None = Query(None, description="Optional NDVI to compute percentile"),
+) -> dict[str, Any]:
+    """Explore static NDVI benchmark by region."""
+    if region.lower() == "all":
+        return {"benchmarks": list_benchmarks()}
+
+    try:
+        baseline = get_region_baseline(region)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    response: dict[str, Any] = {"baseline": baseline}
+    if ndvi is not None:
+        response["comparison"] = compute_regional_benchmark(
+            ndvi=ndvi,
+            region_key=baseline["region_key"],
+            region_name=str(baseline["region"]),
+        )
+
+    return response
 
 
 # ============================================

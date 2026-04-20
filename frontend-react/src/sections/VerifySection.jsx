@@ -176,6 +176,23 @@ export default function VerifySection({ t }) {
                           <span className="score-label">VitisScore</span>
                         </div>
                         <div className="risk-badge" style={{ backgroundColor: getRiskColor(result.risk) }}>{result.risk?.toUpperCase()} RISK</div>
+                        {result.regional_benchmark && (
+                          <div className="regional-benchmark-card">
+                            <span className="regional-title">{t.result.comparedRegion}</span>
+                            <span className="regional-region">{result.regional_benchmark.region}</span>
+                            <div className="regional-row">
+                              <span>{t.result.percentile}</span>
+                              <strong>{result.regional_benchmark.percentile_ndvi}%</strong>
+                            </div>
+                            <div className="regional-row">
+                              <span>{t.result.delta}</span>
+                              <strong className={result.regional_benchmark.delta_vs_region_avg >= 0 ? 'positive' : 'negative'}>
+                                {result.regional_benchmark.delta_vs_region_avg >= 0 ? '+' : ''}
+                                {result.regional_benchmark.delta_vs_region_avg}
+                              </strong>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
 

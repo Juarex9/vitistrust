@@ -931,6 +931,49 @@ main {
   color: var(--bg-void);
 }
 
+.regional-benchmark-card {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.regional-title {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.regional-region {
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.regional-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.regional-row strong {
+  color: var(--text-primary);
+}
+
+.regional-row .positive {
+  color: var(--accent-emerald);
+}
+
+.regional-row .negative {
+  color: var(--accent-rose);
+}
+
 /* Layer Toggle */
 .layer-toggle {
   display: flex;
