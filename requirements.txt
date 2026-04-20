@@ -1,2 +1,23 @@
-# This file intentionally left empty
-# VitisTrust backend is deployed separately on Render
+# VitisTrust Backend Dependencies
+# ================================
+# Requerimientos para la migración a Hedera + Stellar (Soroban)
+
+# FastAPI & Server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-dotenv>=1.0.0
+httpx>=0.26.0
+
+# Hedera SDK (Hiero)
+hiero-sdk-python>=2.40.0
+
+# Stellar SDK (para Soroban)
+stellar-sdk>=11.2.0
+
+# Utilities
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Testing (opcional)
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
