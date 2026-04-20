@@ -1,6 +1,9 @@
 import pytest
 from unittest.mock import patch, MagicMock
 import json
+import asyncio
+import importlib
+import types
 
 import sys
 import os
@@ -157,10 +160,20 @@ class TestBackend:
 
 class TestRetryLogic:
     """Tests for retry logic in backend."""
+
+    @staticmethod
+    def _get_retry_on_failure():
+        fake_stellar_adapter = types.SimpleNamespace(
+            create_stellar_adapter=lambda: None,
+            SorobanAdapter=object,
+        )
+        with patch.dict(sys.modules, {"backend.stellar_adapter": fake_stellar_adapter}):
+            backend_main = importlib.import_module("backend.main")
+        return backend_main.retry_on_failure
     
     def test_retry_decorator_sync(self):
         """Test retry decorator with sync function."""
-        from backend.main import retry_on_failure
+        retry_on_failure = self._get_retry_on_failure()
         
         attempt_count = 0
         
@@ -175,10 +188,28 @@ class TestRetryLogic:
         result = flaky_function()
         assert result == "success"
         assert attempt_count == 3
+
+    def test_retry_decorator_async(self):
+        """Test retry decorator with async function."""
+        retry_on_failure = self._get_retry_on_failure()
+
+        attempt_count = 0
+
+        @retry_on_failure(max_retries=3, delays=[0.01, 0.01])
+        async def flaky_async_function():
+            nonlocal attempt_count
+            attempt_count += 1
+            if attempt_count < 3:
+                raise Exception("Temporary error")
+            return "success"
+
+        result = asyncio.run(flaky_async_function())
+        assert result == "success"
+        assert attempt_count == 3
     
     def test_retry_decorator_failure(self):
         """Test retry decorator when all attempts fail."""
-        from backend.main import retry_on_failure
+        retry_on_failure = self._get_retry_on_failure()
         
         attempt_count = 0
         
@@ -191,4 +222,21 @@ class TestRetryLogic:
         with pytest.raises(Exception):
             always_fails()
         
+        assert attempt_count == 3
+
+    def test_retry_decorator_async_failure(self):
+        """Test retry decorator when async function fails all attempts."""
+        retry_on_failure = self._get_retry_on_failure()
+
+        attempt_count = 0
+
+        @retry_on_failure(max_retries=3, delays=[0.01, 0.01, 0.01])
+        async def always_fails_async():
+            nonlocal attempt_count
+            attempt_count += 1
+            raise Exception("Permanent error")
+
+        with pytest.raises(Exception):
+            asyncio.run(always_fails_async())
+
         assert attempt_count == 3
