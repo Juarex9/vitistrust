@@ -36,7 +36,6 @@ const translations = {
     footer: { network: 'Hedera + Stellar Testnet', rights: '© 2026 VitisTrust' }
   }
 }
-}
 
 function App() {
   const [lang, setLang] = useState('en')
