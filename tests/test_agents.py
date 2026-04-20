@@ -374,6 +374,21 @@ class TestRetryLogic:
         
         assert attempt_count == 3
 
+
+class TestProtocolAgent:
+    """Tests for protocol agent mock mode."""
+
+    def test_hedera_protocol_mock_topic_and_notarization(self):
+        """Mock mode should create topic and notarize without exceptions."""
+        from agents.protocol_agent import HederaProtocol, SUCCESS_MOCK
+
+        protocol = HederaProtocol(is_mock=True)
+        topic_id = protocol.create_audit_topic()
+        assert topic_id is not None
+        assert topic_id.startswith("0.0.")
+
+        status = protocol.notarize_vitis_report(topic_id, {"audit": "ok"})
+        assert status == SUCCESS_MOCK
     def test_retry_decorator_async_failure(self):
         """Test retry decorator when async function fails all attempts."""
         retry_on_failure = self._get_retry_on_failure()
