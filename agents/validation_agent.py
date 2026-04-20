@@ -3,6 +3,8 @@ import logging
 from typing import Any
 from web3 import Web3
 
+from backend.benchmarks import compute_regional_benchmark
+
 logger = logging.getLogger("vitistrust.validation")
 
 # Mendoza wine regions approximate bounding boxes
@@ -334,9 +336,16 @@ def validate_vineyard(
     
     # 1. Geolocation validation
     validations["geolocation"] = validate_geolocation(lat, lon)
-    
+
     # 2. Vegetation validation
     validations["vegetation"] = validate_vegetation(ndvi)
+
+    # 2b. Regional benchmark (reuse detected region)
+    validations["regional_benchmark"] = compute_regional_benchmark(
+        ndvi=ndvi,
+        region_key=validations["geolocation"].get("region_key"),
+        region_name=validations["geolocation"].get("region"),
+    )
     
     # 3. ERC-721 contract validation
     validations["contract"] = validate_erc721_contract(w3, asset_address) if w3.is_address(asset_address) else {
