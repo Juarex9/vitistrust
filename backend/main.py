@@ -20,7 +20,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from agents.perception_agent import get_real_ndvi
-from agents.reasoning_agent import analyze_vineyard_health
+from agents.reasoning_agent import SCORE_MODEL_VERSION, analyze_vineyard_health
 from agents.protocol_agent import HederaProtocol
 from agents.validation_agent import (
     validate_vineyard,
@@ -74,6 +74,8 @@ class AuditResponse(BaseModel):
     hedera_notarization: str
     stellar_tx_hash: str
     hedera_txn_id: str
+    score_model_version: str
+    score_breakdown: dict[str, Any]
     status: str
     investment_analysis: dict[str, Any] | None = None
     validation: dict[str, Any] | None = None
@@ -558,7 +560,20 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
     if not hedera_node:
         raise HTTPException(status_code=503, detail="Hedera not configured")
 
-    hedera_status = await retry_hedera(topic_id, verdict)
+    hedera_payload = {
+        "farm_id": request.farm_id,
+        "coordinates": {"lat": request.lat, "lon": request.lon},
+        "ndvi": ndvi,
+        "score": verdict.get("score"),
+        "risk_level": verdict.get("risk_level"),
+        "justification": verdict.get("justification"),
+        "score_model_version": verdict.get("score_model_version", SCORE_MODEL_VERSION),
+        "score_breakdown": verdict.get("score_breakdown", {}),
+        "investment_analysis": verdict.get("investment_analysis", {}),
+        "metrics": verdict.get("metrics", {}),
+    }
+
+    hedera_status = await retry_hedera(topic_id, hedera_payload)
     hedera_txn_id = verdict.get("hedera_txn_id", "")
 
     # 5. Actualizar en Stellar Soroban (Asset Layer)
@@ -592,6 +607,9 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
         hedera_notarization=hedera_status,
         stellar_tx_hash=stellar_tx_hash,
         hedera_txn_id=hedera_txn_id,
+        score_model_version=verdict.get("score_model_version", SCORE_MODEL_VERSION),
+        score_breakdown=verdict.get("score_breakdown", {}),
+        status="ASSET_CERTIFIED"
         status="ASSET_CERTIFIED",
         investment_analysis=verdict.get("investment_analysis"),
         validation=validation_result,
