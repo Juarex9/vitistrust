@@ -134,14 +134,40 @@ curl "http://localhost:8000/verify-vineyard?lat=-33.1254&lon=-68.8942&farm_id=me
   "vitis_score": 75,
   "risk": "low",
   "justification": "El NDVI de 0.75 indica excelente salud vegetativa...",
+  "ndvi": 0.7512,
+  "satellite_img": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
   "hedera_notarization": "SUCCESS",
-  "stellar_tx_hash": "abc123...",
+  "stellar_tx_hash": "3f08e6f94f7f0f4f3fa7491d58dd4d0f1d6b9ca2d31e2e8c4e...",
+  "hedera_txn_id": "0.0.1234567@1713659342.000001",
   "status": "ASSET_CERTIFIED",
   "investment_analysis": {
     "recommendation": "BUY",
     "risk_score": 20,
     "yield_forecast": "10-12 tons/ha"
-  }
+  },
+  "validation": {
+    "all_valid": true,
+    "can_verify": true,
+    "validations": {
+      "geolocation": {
+        "valid": true,
+        "region": "Valle de Uco",
+        "region_key": "VALLE_DE_UCO",
+        "message": "Coordinates within Valle de Uco"
+      },
+      "vegetation": {
+        "valid": true,
+        "health": "high",
+        "message": "Vegetation detected (NDVI: 0.7512, health: high)"
+      },
+      "contract": null,
+      "token": null,
+      "certificate": null
+    }
+  },
+  "lat": -33.1254,
+  "lon": -68.8942,
+  "source": "sentinel_hub"
 }
 
 # Consultar certificación previa
@@ -149,6 +175,37 @@ curl "http://localhost:8000/certificate/mendoza_1"
 
 # Verificar salud del oráculo
 curl "http://localhost:8000/health"
+```
+
+### Schema final de `/verify-vineyard`
+
+```json
+{
+  "vitis_score": "int",
+  "risk": "str",
+  "justification": "str",
+  "ndvi": "float",
+  "satellite_img": "str (base64 data URL)",
+  "hedera_notarization": "str",
+  "stellar_tx_hash": "str",
+  "hedera_txn_id": "str",
+  "status": "str",
+  "investment_analysis": "dict[str, Any] | null",
+  "validation": {
+    "all_valid": "bool",
+    "can_verify": "bool",
+    "validations": {
+      "geolocation": "dict[str, Any]",
+      "vegetation": "dict[str, Any]",
+      "contract": "dict[str, Any] | null",
+      "token": "dict[str, Any] | null",
+      "certificate": "dict[str, Any] | null"
+    }
+  },
+  "lat": "float | null",
+  "lon": "float | null",
+  "source": "str | null"
+}
 ```
 
 ---
