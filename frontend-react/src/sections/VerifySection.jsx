@@ -17,21 +17,24 @@ export default function VerifySection({ t }) {
   const [timeMachineData, setTimeMachineData] = useState(null)
   const [showOracleModal, setShowOracleModal] = useState(false)
 
+  const hasResultCoords = Number.isFinite(result?.lat) && Number.isFinite(result?.lon)
+  const validationGeo = result?.validation?.validations?.geolocation
+  const validationVegetation = result?.validation?.validations?.vegetation
+
   useEffect(() => {
-    // Time machine solo funciona cuando hay coordenadas válidas
-    if (result?.ndvi) {
-      const lat = parseFloat(result.validation?.geolocation?.region?.split(',')[0] || result.lat || '-33.5')
-      const lon = parseFloat(result.validation?.geolocation?.region?.split(',')[1] || result.lon || '-69.2')
-      fetch(`${API_BASE}/satellite/history?lat=${lat}&lon=${lon}&months=24`)
+    if (result?.ndvi && hasResultCoords) {
+      fetch(`${API_BASE}/satellite/history?lat=${result.lat}&lon=${result.lon}&months=24`)
         .then(res => res.json())
         .then(data => setTimeMachineData(data))
         .catch(console.error)
+    } else {
+      setTimeMachineData(null)
     }
-  }, [result])
+  }, [result, hasResultCoords])
 
   useEffect(() => {
-    if (result?.validation?.geolocation?.valid) {
-      fetch(`${API_BASE}/satellite/layers?lat=-33.5&lon=-69.2`)
+    if (hasResultCoords) {
+      fetch(`${API_BASE}/satellite/layers?lat=${result.lat}&lon=${result.lon}`)
         .then(res => res.json())
         .then(data => {
           if (data.layers?.[activeLayer]) {
@@ -40,7 +43,7 @@ export default function VerifySection({ t }) {
         })
         .catch(console.error)
     }
-  }, [activeLayer])
+  }, [activeLayer, hasResultCoords, result?.lat, result?.lon])
 
   const getRiskColor = (risk) => {
     const colors = { low: '#10b981', medium: '#f59e0b', high: '#f43f5e' }
@@ -181,7 +184,11 @@ export default function VerifySection({ t }) {
                     <div className="technical-view">
                       <div className="satellite-container">
                         <div className="scan-line"></div>
-                        <img src={result.satellite_img} alt="Satellite" className="satellite-img" />
+                        {result?.satellite_img ? (
+                          <img src={result.satellite_img} alt="Satellite" className="satellite-img" />
+                        ) : (
+                          <div className="satellite-img">No satellite image available</div>
+                        )}
                         <div className="oracle-badge" onClick={() => setShowOracleModal(true)}><span>🛡️</span></div>
                         <div className="overlay-tag top-left">SENTINEL-2</div>
                         <div className="overlay-tag bottom-right">MZA_{result.vitis_score}</div>
@@ -209,18 +216,24 @@ export default function VerifySection({ t }) {
                       </div>
                     )}
 
-                    <div className="quick-validation-grid">
-                      <div className={`val-pill ${result.validation?.geolocation?.valid ? 'ok' : 'warn'}`}>📍 Geo</div>
-                      <div className={`val-pill ${result.validation?.vegetation?.valid ? 'ok' : 'warn'}`}>🌿 NDVI: {result.ndvi?.toFixed(3)}</div>
-                    </div>
+                    {result?.validation && (
+                      <div className="quick-validation-grid">
+                        <div className={`val-pill ${validationGeo?.valid ? 'ok' : 'warn'}`}>📍 Geo</div>
+                        <div className={`val-pill ${validationVegetation?.valid ? 'ok' : 'warn'}`}>
+                          🌿 NDVI: {typeof result?.ndvi === 'number' ? result.ndvi.toFixed(3) : 'N/A'}
+                        </div>
+                      </div>
+                    )}
 
                     {result.investment_analysis && (
                       <div className="investment-analysis-panel">
                         <div className="investment-header">
                           <h3>Investment Analysis</h3>
-                          <span className={`recommendation-label ${result.investment_analysis.recommendation?.toLowerCase()}`}>{result.investment_analysis.recommendation}</span>
+                          <span className={`recommendation-label ${result.investment_analysis.recommendation?.toLowerCase() || ''}`}>
+                            {result.investment_analysis.recommendation || 'N/A'}
+                          </span>
                         </div>
-                        <p className="ai-justification">"{result.justification}"</p>
+                        {result.justification && <p className="ai-justification">"{result.justification}"</p>}
                       </div>
                     )}
 
