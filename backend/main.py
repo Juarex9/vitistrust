@@ -20,7 +20,11 @@ from pydantic import BaseModel
 from agents.perception_agent import get_real_ndvi
 from agents.reasoning_agent import analyze_vineyard_health
 from agents.protocol_agent import HederaProtocol
-from agents.validation_agent import validate_vineyard
+from agents.validation_agent import (
+    validate_vineyard,
+    validate_geolocation,
+    validate_vegetation,
+)
 from backend.stellar_adapter import create_stellar_adapter, SorobanAdapter
 from dotenv import load_dotenv
 
@@ -69,6 +73,11 @@ class AuditResponse(BaseModel):
     stellar_tx_hash: str
     hedera_txn_id: str
     status: str
+    investment_analysis: dict[str, Any] | None = None
+    validation: dict[str, Any] | None = None
+    lat: float | None = None
+    lon: float | None = None
+    source: str | None = None
 
 # ============================================
 # Configuración
@@ -440,17 +449,72 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
 
     ndvi = sat_data.get("ndvi", 0)
 
-    # 2. Validación (opcional - mantener si se usa asset_address)
+    # 2. Validación (siempre se devuelve un objeto consistente)
+    validation_result: dict[str, Any] = {
+        "all_valid": False,
+        "can_verify": False,
+        "validations": {
+            "geolocation": validate_geolocation(request.lat, request.lon),
+            "vegetation": validate_vegetation(ndvi),
+            "contract": None,
+            "token": None,
+            "certificate": None,
+        },
+    }
+
     if request.asset_address and request.token_id:
-        # La validación original con coordenadas
-        validation_result = validate_vineyard(
-            request.lat, request.lon, ndvi,
-            request.asset_address, request.token_id,
-            None, None  # Sin web3
+        # Validación extendida si además se recibe información de asset/token
+        try:
+            full_validation = validate_vineyard(
+                request.lat, request.lon, ndvi,
+                request.asset_address, request.token_id,
+                None, None  # Sin web3
+            )
+        except Exception as exc:
+            logger.warning("Extended validation unavailable: %s", exc)
+            full_validation = {
+                "all_valid": validation_result["all_valid"],
+                "can_verify": validation_result["can_verify"],
+                "validations": {
+                    "contract": {
+                        "valid": False,
+                        "message": "Extended contract validation unavailable",
+                    },
+                    "token": {
+                        "valid": False,
+                        "exists": False,
+                        "message": "Extended token validation unavailable",
+                    },
+                    "certificate": {
+                        "exists": False,
+                        "message": "Extended certificate validation unavailable",
+                    },
+                },
+            }
+        validation_result.update(
+            {
+                "all_valid": full_validation.get("all_valid", validation_result["all_valid"]),
+                "can_verify": full_validation.get("can_verify", validation_result["can_verify"]),
+                "validations": {
+                    **validation_result["validations"],
+                    **full_validation.get("validations", {}),
+                },
+            }
         )
         logger.info(
             f"Validation: geoloc={validation_result['validations']['geolocation']['valid']}, "
             f"vegetation={validation_result['validations']['vegetation']['valid']}"
+        )
+    else:
+        validation_result["all_valid"] = (
+            validation_result["validations"]["geolocation"]["valid"]
+            and validation_result["validations"]["vegetation"]["valid"]
+        )
+        validation_result["can_verify"] = validation_result["all_valid"]
+        logger.info(
+            "Validation (partial): geoloc=%s, vegetation=%s",
+            validation_result["validations"]["geolocation"]["valid"],
+            validation_result["validations"]["vegetation"]["valid"],
         )
 
     # 3. Análisis con IA
@@ -499,7 +563,12 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
         hedera_notarization=hedera_status,
         stellar_tx_hash=stellar_tx_hash,
         hedera_txn_id=hedera_txn_id,
-        status="ASSET_CERTIFIED"
+        status="ASSET_CERTIFIED",
+        investment_analysis=verdict.get("investment_analysis"),
+        validation=validation_result,
+        lat=request.lat,
+        lon=request.lon,
+        source=sat_data.get("source"),
     )
 
 
