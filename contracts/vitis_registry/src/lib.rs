@@ -7,7 +7,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, Address, BytesN, Env, Map, Symbol,
+    contract, contractimpl, contracttype, Address, BytesN, Env, Map, String,
 };
 
 /// Storage keys del contrato
@@ -27,6 +27,7 @@ pub struct VitisRecord {
     pub score: u32,              // VitisScore (0-100)
     pub timestamp: u64,           // Unix timestamp
     pub hedera_txn_id: BytesN<32>, // Tx ID de Hedera (32 bytes)
+    pub evidence_cid: String,     // CID del paquete de evidencia en IPFS/Filecoin
     pub auditor: Address,        // Dirección que actualizó
 }
 
@@ -47,7 +48,7 @@ impl VitisRegistry {
         env.storage().instance().set(&DataKey::Admin, &admin);
         
         // Inicializar mapa de registros vacío
-        let empty_map: Map<Symbol, VitisRecord> = Map::new(&env);
+        let empty_map: Map<String, VitisRecord> = Map::new(&env);
         env.storage().instance().set(&DataKey::Records, &empty_map);
     }
 
@@ -59,9 +60,10 @@ impl VitisRegistry {
     /// * `hedera_txn_id` - Transaction ID de Hedera HCS (32 bytes)
     pub fn update_score(
         env: Env,
-        farm_id: Symbol,
+        farm_id: String,
         score: u32,
         hedera_txn_id: BytesN<32>,
+        evidence_cid: String,
     ) {
         // === AUTORIZACIÓN: Solo el admin puede actualizar ===
         let admin: Address = env.storage().instance()
@@ -77,7 +79,7 @@ impl VitisRegistry {
         }
 
         // Obtener registros existentes
-        let mut records: Map<Symbol, VitisRecord> = env.storage()
+        let mut records: Map<String, VitisRecord> = env.storage()
             .instance()
             .get(&DataKey::Records)
             .unwrap_or_else(|| Map::new(&env));
@@ -87,6 +89,7 @@ impl VitisRegistry {
             score,
             timestamp: env.ledger().timestamp(),
             hedera_txn_id,
+            evidence_cid,
             auditor: admin.clone(),
         };
 
@@ -96,14 +99,14 @@ impl VitisRegistry {
 
         // Emitir evento
         env.events().publish(
-            &(Symbol::new(&env, "score_updated")),
+            &(String::from_str(&env, "score_updated")),
             &farm_id,
         );
     }
 
     /// Consulta el VitisScore de un viñedo
-    pub fn get_score(env: Env, farm_id: Symbol) -> (u32, u64, BytesN<32>, Address) {
-        let records: Map<Symbol, VitisRecord> = env.storage()
+    pub fn get_score(env: Env, farm_id: String) -> (u32, u64, BytesN<32>, String, Address) {
+        let records: Map<String, VitisRecord> = env.storage()
             .instance()
             .get(&DataKey::Records)
             .unwrap_or_else(|| Map::new(&env));
@@ -112,12 +115,18 @@ impl VitisRegistry {
             panic!("No record found for farm");
         });
 
-        (record.score, record.timestamp, record.hedera_txn_id, record.auditor)
+        (
+            record.score,
+            record.timestamp,
+            record.hedera_txn_id,
+            record.evidence_cid,
+            record.auditor,
+        )
     }
 
     /// Verifica si existe un registro
-    pub fn has_record(env: Env, farm_id: Symbol) -> bool {
-        let records: Map<Symbol, VitisRecord> = env.storage()
+    pub fn has_record(env: Env, farm_id: String) -> bool {
+        let records: Map<String, VitisRecord> = env.storage()
             .instance()
             .get(&DataKey::Records)
             .unwrap_or_else(|| Map::new(&env));

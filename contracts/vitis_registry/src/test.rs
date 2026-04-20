@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 mod test {
-    use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, Symbol};
+    use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String};
 
     use crate::{VitisRegistry, VitisRegistryClient};
 
@@ -26,7 +26,7 @@ mod test {
         client.initialize(&admin);
         
         // Verificar que el admin fue configurado
-        let has_record = client.has_record(&Symbol::new(&env, "test_farm"));
+        let has_record = client.has_record(&String::from_str(&env, "test_farm"));
         assert!(!has_record); // No hay registros aún
     }
 
@@ -42,16 +42,18 @@ mod test {
         client.initialize(&admin);
         
         // Actualizar score
-        let farm_id = Symbol::new(&env, "mendoza_1");
+        let farm_id = String::from_str(&env, "mendoza_1");
         let tx_id = generate_tx_id();
-        
-        client.update_score(&farm_id, &85, &tx_id);
+        let evidence_cid = String::from_str(&env, "bafybeigdyrzt5...");
+
+        client.update_score(&farm_id, &85, &tx_id, &evidence_cid);
         
         // Verificar
-        let (score, timestamp, _tx_id, auditor) = client.get_score(&farm_id);
+        let (score, timestamp, _tx_id, stored_cid, auditor) = client.get_score(&farm_id);
         
         assert_eq!(score, 85);
         assert!(timestamp > 0);
+        assert_eq!(stored_cid, evidence_cid);
         assert_eq!(auditor, admin);
     }
 
@@ -83,9 +85,10 @@ mod test {
         let admin = Address::generate(&env);
         client.initialize(&admin);
         
-        let farm_id = Symbol::new(&env, "test");
+        let farm_id = String::from_str(&env, "test");
         let tx_id = generate_tx_id();
-        
-        client.update_score(&farm_id, &150, &tx_id); // Score inválido
+        let evidence_cid = String::from_str(&env, "bafybeigdyrzt5...");
+
+        client.update_score(&farm_id, &150, &tx_id, &evidence_cid); // Score inválido
     }
 }

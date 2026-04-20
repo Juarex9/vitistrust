@@ -268,6 +268,7 @@ class SorobanAdapter:
         farm_id: str,
         score: int,
         hedera_txn_id: bytes,
+        evidence_cid: str,
     ) -> str:
         """
         Actualiza el VitisScore de un viñedo en el contrato Soroban.
@@ -293,6 +294,25 @@ class SorobanAdapter:
         if not is_owner:
             return await inflight_future
         
+        # Construir invocación
+        invoke_op = self._get_invocation_data(
+            "update_score",
+            [
+                farm_id,
+                score,
+                hedera_txn_id,
+                evidence_cid,
+            ]
+        )
+        
+        # Firmar y enviar (el oráculo es el admin, firma la tx)
+        tx_hash = await self._submit_transaction(
+            source=self.config.oracle_keypair,
+            operations=[invoke_op]
+        )
+        
+        logger.info(f"VitisScore updated successfully. TX: {tx_hash}")
+        return tx_hash
         try:
             invoke_op = self._get_invocation_data(
                 "update_score",
@@ -344,7 +364,7 @@ class SorobanAdapter:
         Consulta el VitisScore de un viñedo.
         
         Returns:
-            Dict con score, timestamp, hedera_txn_id, auditor
+            Dict con score, timestamp, hedera_txn_id, evidence_cid, auditor
         """
         logger.info(f"Querying VitisScore for {farm_id}")
         
