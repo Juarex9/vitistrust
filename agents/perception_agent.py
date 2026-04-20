@@ -1,5 +1,6 @@
 # agents/perception_agent.py
 import logging
+from datetime import datetime, timezone
 from typing import Any
 import time
 
@@ -7,6 +8,7 @@ import requests
 
 from dotenv import load_dotenv
 import os
+from backend.time_window import build_time_window
 
 load_dotenv()
 
@@ -53,7 +55,7 @@ def _get_sentinel_token() -> str | None:
     return None
 
 
-def get_real_ndvi(lat: float, lon: float) -> dict[str, Any]:
+def get_real_ndvi(lat: float, lon: float, date_from: str | None = None, date_to: str | None = None) -> dict[str, Any]:
     """
     Consulta el índice NDVI de un viñedo usando Sentinel-2 via Sentinel Hub.
     
@@ -64,46 +66,79 @@ def get_real_ndvi(lat: float, lon: float) -> dict[str, Any]:
     Returns:
         Dict con status, ndvi, coordinates, source
     """
+    result = get_real_indices(lat, lon)
+    if result["status"] == "success":
+        return {
+            "status": "success",
+            "ndvi": result["ndvi"],
+            "coordinates": {"lat": lat, "lon": lon},
+            "source": result["source"],
+        }
+    return _fallback_ndvi(lat, lon)
+
+
+def get_real_indices(lat: float, lon: float) -> dict[str, Any]:
+    """Consulta NDVI + NDMI reales desde Sentinel Hub Statistics API."""
     token = _get_sentinel_token()
-    
     if not token:
-        logger.warning("No Sentinel token, using fallback NDVI")
-        return _fallback_ndvi(lat, lon)
-    
+        logger.warning("No Sentinel token, using fallback NDVI/NDMI")
+        return _fallback_indices(lat, lon)
+
     offset = 0.0005
     bbox = [lon - offset, lat - offset, lon + offset, lat + offset]
-    
+    now_utc = datetime.now(timezone.utc)
+    date_to = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    date_from = (now_utc.replace(hour=0, minute=0, second=0, microsecond=0)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     payload = {
         "input": {
-            "bounds": {"bbox": bbox},
-            "data": [{
-                "type": "sentinel-2-l2a",
-                "dataFilter": {
-                    "timeRange": {
-                        "from": "2025-01-01T00:00:00Z",
-                        "to": "2026-03-26T23:59:59Z"
+            "bounds": {
+                "bbox": bbox,
+                "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"},
+            },
+            "data": [
+                {
+                    "type": "sentinel-2-l2a",
+                    "dataFilter": {
+                        "timeRange": {"from": date_from, "to": date_to},
+                        "maxCloudCoverage": 50,
                     },
-                    "maxCloudCoverage": 50
                 }
-            }]
+            ],
         },
         "aggregation": {
+            "timeRange": {"from": date_from, "to": date_to},
+            "aggregationInterval": {"of": "P1D"},
+            "resx": 10,
+            "resy": 10,
             "evalscript": """
                 //VERSION=3
                 function setup() {
                   return {
-                    input: [{ bands: ["B04", "B08"] }],
-                    output: { id: "default", bands: 1 }
+                    input: [{ bands: ["B04", "B08", "B11", "dataMask"] }],
+                    output: [
+                      { id: "ndvi", bands: 1 },
+                      { id: "ndmi", bands: 1 },
+                      { id: "dataMask", bands: 1 }
+                    ]
                   };
                 }
-                function evaluatePixel(samples) {
-                  let ndvi = (samples.B08 - samples.B04) / (samples.B08 + samples.B04);
-                  return [ndvi];
+                function evaluatePixel(sample) {
+                  const ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04);
+                  const ndmi = (sample.B08 - sample.B11) / (sample.B08 + sample.B11);
+                  return {
+                    ndvi: [ndvi],
+                    ndmi: [ndmi],
+                    dataMask: [sample.dataMask]
+                  };
                 }
             """,
-            "resampling": "BILINEAR",
-            "pixelBounds": [10, 10]
-        }
+        },
+        "calculations": {
+            "ndvi": {"statistics": {"default": {"percentiles": {"k": [5, 50, 95]}}}},
+            "ndmi": {"statistics": {"default": {"percentiles": {"k": [5, 50, 95]}}}},
+        },
     }
 
     try:
@@ -111,40 +146,54 @@ def get_real_ndvi(lat: float, lon: float) -> dict[str, Any]:
             SATELLITE_STATS_URL,
             json=payload,
             headers={"Authorization": f"Bearer {token}"},
-            timeout=60
+            timeout=60,
         )
-        
         if response.status_code == 401:
             logger.warning("Sentinel token expired, using fallback")
             _token_cache["token"] = None
-            return _fallback_ndvi(lat, lon)
-        
+            return _fallback_indices(lat, lon)
         response.raise_for_status()
         data = response.json()
-        
-        if "data" not in data or len(data.get("data", [])) == 0:
-            logger.warning("No data from Sentinel, using fallback")
-            return _fallback_ndvi(lat, lon)
-        
-        avg_ndvi = data["data"][0]["outputs"]["default"]["bands"]["B0"]["stats"]["mean"]
-        
+        entries = data.get("data", [])
+        if not entries:
+            logger.warning("No Sentinel statistics data, using fallback")
+            return _fallback_indices(lat, lon)
+
+        outputs = entries[-1].get("outputs", {})
+        ndvi = _extract_mean(outputs, "ndvi")
+        ndmi = _extract_mean(outputs, "ndmi")
+        if ndvi is None or ndmi is None:
+            logger.warning("Unable to parse NDVI/NDMI from Sentinel response")
+            return _fallback_indices(lat, lon)
+
         return {
             "status": "success",
-            "ndvi": round(avg_ndvi, 3),
+            "ndvi": round(ndvi, 3),
+            "ndmi": round(ndmi, 3),
             "coordinates": {"lat": lat, "lon": lon},
-            "source": "Sentinel-2 L2A via Sentinel Hub"
+            "source": "Sentinel-2 L2A via Sentinel Hub Statistics API",
         }
     except requests.RequestException as e:
         logger.error(f"Sentinel Hub API error: {e}")
-        return _fallback_ndvi(lat, lon)
-    except (KeyError, IndexError, TypeError) as e:
-        logger.error(f"Failed to parse response: {e}")
-        return _fallback_ndvi(lat, lon)
+        return _fallback_indices(lat, lon)
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        logger.error(f"Failed to parse Sentinel statistics response: {e}")
+        return _fallback_indices(lat, lon)
+
+
+def _extract_mean(outputs: dict[str, Any], channel: str) -> float | None:
+    channel_data = outputs.get(channel, {})
+    bands = channel_data.get("bands", {})
+    band_data = bands.get("B0", {})
+    stats = band_data.get("stats", {})
+    mean = stats.get("mean")
+    if mean is None:
+        return None
+    return float(mean)
 
 
 def _fallback_ndvi(lat: float, lon: float) -> dict[str, Any]:
     """Fallback NDVI determinista basado en coordenadas (región de Mendoza)."""
-    # Usar hash de coords para obtener seed determinista
     seed = int(abs(lat * lon * 1000000) % 10000)
     base_ndvi = 0.55 + (seed / 100000) - 0.05
     return {
@@ -152,6 +201,54 @@ def _fallback_ndvi(lat: float, lon: float) -> dict[str, Any]:
         "ndvi": round(base_ndvi, 3),
         "coordinates": {"lat": lat, "lon": lon},
         "source": "Fallback (demo mode)"
+    }
+
+
+def _fallback_indices(lat: float, lon: float) -> dict[str, Any]:
+    """Fallback determinista NDVI + NDMI."""
+    seed = int(abs(lat * lon * 1000000) % 10000)
+    base_ndvi = 0.55 + (seed / 100000) - 0.05
+    base_ndmi = 0.2 + (seed / 120000) - 0.04
+    return {
+        "status": "success",
+        "ndvi": round(base_ndvi, 3),
+        "ndmi": round(base_ndmi, 3),
+        "coordinates": {"lat": lat, "lon": lon},
+        "source": "Fallback (demo mode)",
+    }
+
+
+def get_phenology_thresholds(month: int) -> dict[str, float | str]:
+    """Umbrales de NDMI por etapa fenológica (hemisferio sur)."""
+    if month in [9, 10]:
+        return {"stage": "budbreak", "critical": 0.05, "warning": 0.12}
+    if month in [11, 12]:
+        return {"stage": "flowering_fruitset", "critical": 0.08, "warning": 0.16}
+    if month in [1, 2]:
+        return {"stage": "veraison_ripening", "critical": 0.12, "warning": 0.2}
+    if month in [3, 4]:
+        return {"stage": "harvest_postharvest", "critical": 0.08, "warning": 0.15}
+    return {"stage": "dormancy", "critical": -0.02, "warning": 0.05}
+
+
+def get_water_stress_level(ndmi: float, month: int | None = None) -> dict[str, Any]:
+    """Calcula nivel de estrés hídrico usando umbrales fenológicos/estacionales."""
+    month_value = month or datetime.now(timezone.utc).month
+    thresholds = get_phenology_thresholds(month_value)
+    if ndmi <= float(thresholds["critical"]):
+        level = "critical"
+    elif ndmi <= float(thresholds["warning"]):
+        level = "warning"
+    else:
+        level = "normal"
+    return {
+        "level": level,
+        "ndmi": round(ndmi, 3),
+        "phenology_stage": thresholds["stage"],
+        "thresholds": {
+            "critical": thresholds["critical"],
+            "warning": thresholds["warning"],
+        },
     }
 
 
