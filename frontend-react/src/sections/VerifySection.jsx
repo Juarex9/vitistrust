@@ -18,9 +18,10 @@ export default function VerifySection({ t }) {
   const [showOracleModal, setShowOracleModal] = useState(false)
 
   useEffect(() => {
-    if (result?.ndvi && result.validation?.geolocation?.valid) {
-      const lat = parseFloat(result.validation.geolocation.region?.split(',')[0] || '-33.5')
-      const lon = parseFloat(result.validation.geolocation.region?.split(',')[1] || '-69.2')
+    // Time machine solo funciona cuando hay coordenadas válidas
+    if (result?.ndvi) {
+      const lat = parseFloat(result.validation?.geolocation?.region?.split(',')[0] || result.lat || '-33.5')
+      const lon = parseFloat(result.validation?.geolocation?.region?.split(',')[1] || result.lon || '-69.2')
       fetch(`${API_BASE}/satellite/history?lat=${lat}&lon=${lon}&months=24`)
         .then(res => res.json())
         .then(data => setTimeMachineData(data))
@@ -51,8 +52,7 @@ export default function VerifySection({ t }) {
     const formData = new FormData(e.target)
     const lat = formData.get('lat')
     const lon = formData.get('lon')
-    const assetAddress = formData.get('assetAddress')
-    const tokenId = formData.get('tokenId')
+    const farmId = formData.get('farmId')
 
     setLoading(true)
     setError(null)
@@ -61,8 +61,8 @@ export default function VerifySection({ t }) {
 
     try {
       const url = verifyMode === 'check' 
-        ? `${API_BASE}/certificate/${assetAddress}/${tokenId}`
-        : `${API_BASE}/verify-vineyard?lat=${lat}&lon=${lon}&asset_address=${assetAddress}&token_id=${tokenId}`
+        ? `${API_BASE}/certificate/${farmId}`
+        : `${API_BASE}/verify-vineyard?lat=${lat}&lon=${lon}&farm_id=${farmId}`
       
       const response = await fetch(url)
       if (!response.ok) throw new Error((await response.json()).detail || 'Verification failed')
@@ -112,16 +112,18 @@ export default function VerifySection({ t }) {
                     <label htmlFor="lon">{t.form.lon}</label>
                     <input type="text" id="lon" name="lon" placeholder="-69.2429" required />
                   </div>
+                  <div className="form-group full-width">
+                    <label htmlFor="farmId">{t.form.farm}</label>
+                    <input type="text" id="farmId" name="farmId" placeholder="mendoza_1" required />
+                  </div>
                 </>
               )}
-              <div className="form-group full-width">
-                <label htmlFor="assetAddress">{t.form.asset}</label>
-                <input type="text" id="assetAddress" name="assetAddress" placeholder="0x..." required />
-              </div>
-              <div className="form-group full-width">
-                <label htmlFor="tokenId">{t.form.token}</label>
-                <input type="number" id="tokenId" name="tokenId" placeholder="1" required />
-              </div>
+              {verifyMode === 'check' && (
+                <div className="form-group full-width">
+                  <label htmlFor="farmId">{t.form.farm}</label>
+                  <input type="text" id="farmId" name="farmId" placeholder="mendoza_1" required />
+                </div>
+              )}
             </div>
             <button type="submit" className="verify-btn" disabled={loading}>
               {loading ? <><span className="spinner"></span>{t.result.loading}</> : <>{t.form.button}→</>}
@@ -137,18 +139,18 @@ export default function VerifySection({ t }) {
               </span>
             </div>
 
-            {result && (
+              {result && (
               <div className="audit-dashboard">
                 {verifyMode === 'check' ? (
                   <div className="existing-cert">
                     <div className="cert-details">
                       <div className="cert-score">
-                        <span className="cert-score-value">{result.vitis_score}</span>
+                        <span className="cert-score-value">{result.vitis_score || result.vitals_score}</span>
                         <span className="cert-score-label">{t.result.score}</span>
                       </div>
                       <div className="cert-info">
-                        <div className="cert-row"><span className="cert-label">Asset</span><span className="cert-value">{result.asset_address}</span></div>
-                        <div className="cert-row"><span className="cert-label">Token ID</span><span className="cert-value">#{result.token_id}</span></div>
+                        <div className="cert-row"><span className="cert-label">Farm ID</span><span className="cert-value">{result.farm_id}</span></div>
+                        <div className="cert-row"><span className="cert-label">Timestamp</span><span className="cert-value">{result.timestamp}</span></div>
                       </div>
                     </div>
                   </div>
@@ -210,15 +212,15 @@ export default function VerifySection({ t }) {
                       <div className="proof-item">
                         <span className="p-icon">◈</span>
                         <div className="p-data">
-                          <span className="p-label">Hedera Topic</span>
+                          <span className="p-label">Hedera HCS</span>
                           <span className="p-hash">{result.hedera_notarization}</span>
                         </div>
                       </div>
                       <div className="proof-item">
-                        <span className="p-icon">⬡</span>
+                        <span className="p-icon">✦</span>
                         <div className="p-data">
-                          <span className="p-label">Rootstock TX</span>
-                          <a href={`https://explorer.testnet.rsk.co/tx/${result.rsk_tx_hash}`} target="_blank" className="p-link">{result.rsk_tx_hash?.substring(0, 16)}...</a>
+                          <span className="p-label">Stellar TX</span>
+                          <span className="p-hash">{result.stellar_tx_hash?.substring(0, 16)}...</span>
                         </div>
                       </div>
                     </div>

@@ -1,0 +1,20 @@
+[package]
+name = "vitis_registry"
+version = "1.0.0"
+edition = "2021"
+description = "VitisRegistry: VitisScore storage for tokenized vineyards on Soroban"
+authors = ["VitisTrust"]
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = "20.0.0"
+
+[dev-dependencies]
+soroban-sdk = { version = "20.0.0", features = ["testutils"] }
+
+[profile.release]
+opt-level = "z"
+lto = true

@@ -45,16 +45,18 @@ export default function VerificationForm({
                   <label htmlFor="lon">{t.form.lon}</label>
                   <input type="text" id="lon" name="lon" placeholder="-69.2429" required />
                 </div>
+                <div className="form-group full-width">
+                  <label htmlFor="farmId">{t.form.farm}</label>
+                  <input type="text" id="farmId" name="farmId" placeholder="mendoza_1" required />
+                </div>
               </>
             )}
-            <div className="form-group full-width">
-              <label htmlFor="assetAddress">{t.form.asset}</label>
-              <input type="text" id="assetAddress" name="assetAddress" placeholder="0x..." required />
-            </div>
-            <div className="form-group full-width">
-              <label htmlFor="tokenId">{t.form.token}</label>
-              <input type="number" id="tokenId" name="tokenId" placeholder="1" required />
-            </div>
+            {mode === 'check' && (
+              <div className="form-group full-width">
+                <label htmlFor="farmId">{t.form.farm}</label>
+                <input type="text" id="farmId" name="farmId" placeholder="mendoza_1" required />
+              </div>
+            )}
           </div>
 
           <button type="submit" className="verify-btn" disabled={loading}>
