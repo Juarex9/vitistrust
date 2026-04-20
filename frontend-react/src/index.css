@@ -931,6 +931,49 @@ main {
   color: var(--bg-void);
 }
 
+.regional-benchmark-card {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.regional-title {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.regional-region {
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.regional-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.regional-row strong {
+  color: var(--text-primary);
+}
+
+.regional-row .positive {
+  color: var(--accent-emerald);
+}
+
+.regional-row .negative {
+  color: var(--accent-rose);
+}
+
 /* Layer Toggle */
 .layer-toggle {
   display: flex;
@@ -1150,6 +1193,68 @@ main {
   font-style: italic;
   line-height: 1.6;
   margin-bottom: 1rem;
+}
+
+.score-breakdown-panel {
+  background: linear-gradient(135deg, var(--bg-panel) 0%, rgba(0, 212, 255, 0.08) 100%);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  margin-top: 1rem;
+}
+
+.score-model-version {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--accent-cyan);
+  padding: 0.2rem 0.5rem;
+  background: rgba(0, 212, 255, 0.12);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 999px;
+}
+
+.stacked-bar {
+  display: flex;
+  width: 100%;
+  height: 14px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  margin-bottom: 0.8rem;
+}
+
+.stacked-segment {
+  height: 100%;
+}
+
+.breakdown-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.breakdown-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.72rem;
+}
+
+.breakdown-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+}
+
+.breakdown-name {
+  color: var(--text-secondary);
+}
+
+.breakdown-values {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
 }
 
 .investment-stats-grid {

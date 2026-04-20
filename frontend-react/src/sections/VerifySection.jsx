@@ -17,21 +17,24 @@ export default function VerifySection({ t }) {
   const [timeMachineData, setTimeMachineData] = useState(null)
   const [showOracleModal, setShowOracleModal] = useState(false)
 
+  const hasResultCoords = Number.isFinite(result?.lat) && Number.isFinite(result?.lon)
+  const validationGeo = result?.validation?.validations?.geolocation
+  const validationVegetation = result?.validation?.validations?.vegetation
+
   useEffect(() => {
-    // Time machine solo funciona cuando hay coordenadas válidas
-    if (result?.ndvi) {
-      const lat = parseFloat(result.validation?.geolocation?.region?.split(',')[0] || result.lat || '-33.5')
-      const lon = parseFloat(result.validation?.geolocation?.region?.split(',')[1] || result.lon || '-69.2')
-      fetch(`${API_BASE}/satellite/history?lat=${lat}&lon=${lon}&months=24`)
+    if (result?.ndvi && hasResultCoords) {
+      fetch(`${API_BASE}/satellite/history?lat=${result.lat}&lon=${result.lon}&months=24`)
         .then(res => res.json())
         .then(data => setTimeMachineData(data))
         .catch(console.error)
+    } else {
+      setTimeMachineData(null)
     }
-  }, [result])
+  }, [result, hasResultCoords])
 
   useEffect(() => {
-    if (result?.validation?.geolocation?.valid) {
-      fetch(`${API_BASE}/satellite/layers?lat=-33.5&lon=-69.2`)
+    if (hasResultCoords) {
+      fetch(`${API_BASE}/satellite/layers?lat=${result.lat}&lon=${result.lon}`)
         .then(res => res.json())
         .then(data => {
           if (data.layers?.[activeLayer]) {
@@ -40,7 +43,7 @@ export default function VerifySection({ t }) {
         })
         .catch(console.error)
     }
-  }, [activeLayer])
+  }, [activeLayer, hasResultCoords, result?.lat, result?.lon])
 
   const getRiskColor = (risk) => {
     const colors = { low: '#10b981', medium: '#f59e0b', high: '#f43f5e' }
@@ -50,6 +53,20 @@ export default function VerifySection({ t }) {
   const getAlertColor = (severity) => {
     const colors = { low: '#38bdf8', medium: '#f59e0b', high: '#f43f5e' }
     return colors[severity?.toLowerCase()] || '#6b7280'
+  const breakdownLabels = {
+    vegetation: 'Vegetation',
+    humidity: 'Humidity',
+    temporal_consistency: 'Temporal',
+    data_quality: 'Data Quality',
+    ai_reliability: 'AI Reliability'
+  }
+
+  const breakdownColors = {
+    vegetation: '#22c55e',
+    humidity: '#3b82f6',
+    temporal_consistency: '#a78bfa',
+    data_quality: '#f59e0b',
+    ai_reliability: '#14b8a6'
   }
 
   const handleSubmit = async (e) => {
@@ -170,7 +187,11 @@ export default function VerifySection({ t }) {
                     <div className="technical-view">
                       <div className="satellite-container">
                         <div className="scan-line"></div>
-                        <img src={result.satellite_img} alt="Satellite" className="satellite-img" />
+                        {result?.satellite_img ? (
+                          <img src={result.satellite_img} alt="Satellite" className="satellite-img" />
+                        ) : (
+                          <div className="satellite-img">No satellite image available</div>
+                        )}
                         <div className="oracle-badge" onClick={() => setShowOracleModal(true)}><span>🛡️</span></div>
                         <div className="overlay-tag top-left">SENTINEL-2</div>
                         <div className="overlay-tag bottom-right">MZA_{result.vitis_score}</div>
@@ -181,6 +202,23 @@ export default function VerifySection({ t }) {
                           <span className="score-label">VitisScore</span>
                         </div>
                         <div className="risk-badge" style={{ backgroundColor: getRiskColor(result.risk) }}>{result.risk?.toUpperCase()} RISK</div>
+                        {result.regional_benchmark && (
+                          <div className="regional-benchmark-card">
+                            <span className="regional-title">{t.result.comparedRegion}</span>
+                            <span className="regional-region">{result.regional_benchmark.region}</span>
+                            <div className="regional-row">
+                              <span>{t.result.percentile}</span>
+                              <strong>{result.regional_benchmark.percentile_ndvi}%</strong>
+                            </div>
+                            <div className="regional-row">
+                              <span>{t.result.delta}</span>
+                              <strong className={result.regional_benchmark.delta_vs_region_avg >= 0 ? 'positive' : 'negative'}>
+                                {result.regional_benchmark.delta_vs_region_avg >= 0 ? '+' : ''}
+                                {result.regional_benchmark.delta_vs_region_avg}
+                              </strong>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -240,14 +278,57 @@ export default function VerifySection({ t }) {
                       <div className={`val-pill ${result.validation?.geolocation?.valid ? 'ok' : 'warn'}`}>📍 Geo</div>
                       <div className={`val-pill ${result.validation?.vegetation?.valid ? 'ok' : 'warn'}`}>🌿 NDVI: {result.ndvi?.toFixed(3)}</div>
                     </div>
+                    {result?.validation && (
+                      <div className="quick-validation-grid">
+                        <div className={`val-pill ${validationGeo?.valid ? 'ok' : 'warn'}`}>📍 Geo</div>
+                        <div className={`val-pill ${validationVegetation?.valid ? 'ok' : 'warn'}`}>
+                          🌿 NDVI: {typeof result?.ndvi === 'number' ? result.ndvi.toFixed(3) : 'N/A'}
+                        </div>
+                      </div>
+                    )}
 
                     {result.investment_analysis && (
                       <div className="investment-analysis-panel">
                         <div className="investment-header">
                           <h3>Investment Analysis</h3>
-                          <span className={`recommendation-label ${result.investment_analysis.recommendation?.toLowerCase()}`}>{result.investment_analysis.recommendation}</span>
+                          <span className={`recommendation-label ${result.investment_analysis.recommendation?.toLowerCase() || ''}`}>
+                            {result.investment_analysis.recommendation || 'N/A'}
+                          </span>
                         </div>
-                        <p className="ai-justification">"{result.justification}"</p>
+                        {result.justification && <p className="ai-justification">"{result.justification}"</p>}
+                      </div>
+                    )}
+
+                    {result.score_breakdown?.components && (
+                      <div className="score-breakdown-panel">
+                        <div className="investment-header">
+                          <h3>Score Breakdown</h3>
+                          <span className="score-model-version">{result.score_model_version || 'v1.0.0'}</span>
+                        </div>
+                        <div className="stacked-bar">
+                          {Object.entries(result.score_breakdown.components).map(([key, component]) => (
+                            <div
+                              key={key}
+                              className="stacked-segment"
+                              style={{
+                                width: `${component.weight * 100}%`,
+                                backgroundColor: breakdownColors[key] || '#334155'
+                              }}
+                              title={`${breakdownLabels[key] || key}: +${component.contribution}`}
+                            />
+                          ))}
+                        </div>
+                        <div className="breakdown-list">
+                          {Object.entries(result.score_breakdown.components).map(([key, component]) => (
+                            <div key={key} className="breakdown-row">
+                              <span className="breakdown-dot" style={{ backgroundColor: breakdownColors[key] || '#334155' }} />
+                              <span className="breakdown-name">{breakdownLabels[key] || key}</span>
+                              <span className="breakdown-values">
+                                {component.component_score?.toFixed(1)} × {(component.weight * 100).toFixed(0)}% = +{component.contribution?.toFixed(2)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )}
 
