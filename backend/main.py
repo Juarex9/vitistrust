@@ -9,6 +9,7 @@ import logging
 import asyncio
 import inspect
 import base64
+from datetime import datetime, timezone
 import statistics
 from datetime import datetime, timedelta
 import time
@@ -108,6 +109,40 @@ class AuditResponse(BaseModel):
     lon: float | None = None
     source: str | None = None
 
+
+class OpenDisputeRequest(BaseModel):
+    record_id: str
+    bond: float
+    reason: str | None = None
+    challenger: str
+
+
+class ResolveDisputeRequest(BaseModel):
+    record_id: str
+    verdict: bool
+    resolver: str
+    notes: str | None = None
+
+
+class UpdateScoringModelRequest(BaseModel):
+    version: int
+    updated_by: str
+    changelog: str | None = None
+
+
+class DisputeResponse(BaseModel):
+    record_id: str
+    status: str
+    bond: float
+    scoring_model_version: int
+    challenger: str
+    resolver: str | None = None
+    verdict: bool | None = None
+    hedera_status: str | None = None
+    hedera_txn_id: str | None = None
+    created_at: str
+    resolved_at: str | None = None
+
 # ============================================
 # Configuración
 # ============================================
@@ -117,6 +152,12 @@ SENTINEL_CLIENT_SECRET = os.getenv("SENTINEL_CLIENT_SECRET", "")
 
 MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 5]
+MIN_DISPUTE_BOND = float(os.getenv("MIN_DISPUTE_BOND", "0.01"))
+INITIAL_ARBITRATOR = os.getenv("INITIAL_ARBITRATOR", "INV_ADMIN_MULTISIG")
+
+_disputes: dict[str, dict[str, Any]] = {}
+_disputes_lock = asyncio.Lock()
+_current_scoring_model_version = int(os.getenv("SCORING_MODEL_VERSION", "1"))
 
 
 def retry_on_failure(max_retries: int = MAX_RETRIES, delays: list = RETRY_DELAYS):
@@ -210,6 +251,17 @@ async def retry_hedera(topic_id: str, verdict: dict[str, Any]) -> str:
     if not hedera_node:
         raise RuntimeError("Hedera not configured")
     return hedera_node.notarize_vitis_report(topic_id, verdict)
+
+
+async def _notarize_dispute_payload(payload: dict[str, Any]) -> tuple[str, str]:
+    topic_id = os.getenv("HEDERA_TOPIC_ID")
+    if not topic_id:
+        return ("HEDERA_TOPIC_NOT_CONFIGURED", "")
+    if not hedera_node:
+        return ("HEDERA_NOT_CONFIGURED", "")
+
+    status = await retry_hedera(topic_id, payload)
+    return (status, payload.get("hedera_txn_id", ""))
 
 
 # ============================================
@@ -911,6 +963,117 @@ async def get_certificate(farm_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@app.get("/arbitration/config")
+async def get_arbitration_config() -> dict[str, Any]:
+    return {
+        "initial_arbitrator": INITIAL_ARBITRATOR,
+        "scoring_model_version": _current_scoring_model_version,
+        "min_dispute_bond": MIN_DISPUTE_BOND,
+    }
+
+
+@app.post("/arbitration/scoring-model")
+async def update_scoring_model(request: UpdateScoringModelRequest) -> dict[str, Any]:
+    global _current_scoring_model_version
+
+    if request.version <= _current_scoring_model_version:
+        raise HTTPException(status_code=400, detail="Version must increase")
+
+    previous = _current_scoring_model_version
+    _current_scoring_model_version = request.version
+
+    payload = {
+        "type": "SCORING_MODEL_UPDATED",
+        "previous_version": previous,
+        "new_version": request.version,
+        "updated_by": request.updated_by,
+        "changelog": request.changelog,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    hedera_status, hedera_txn_id = await _notarize_dispute_payload(payload)
+    return {
+        "previous_version": previous,
+        "current_version": _current_scoring_model_version,
+        "hedera_status": hedera_status,
+        "hedera_txn_id": hedera_txn_id,
+    }
+
+
+@app.post("/disputes/open", response_model=DisputeResponse)
+async def open_dispute(request: OpenDisputeRequest) -> DisputeResponse:
+    if request.bond < MIN_DISPUTE_BOND:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bond too low. Minimum required: {MIN_DISPUTE_BOND}"
+        )
+
+    async with _disputes_lock:
+        current = _disputes.get(request.record_id)
+        if current and current["status"] == "OPEN":
+            raise HTTPException(status_code=409, detail="Dispute already open for record")
+
+        created_at = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "record_id": request.record_id,
+            "type": "DISPUTE_OPENED",
+            "bond": request.bond,
+            "challenger": request.challenger,
+            "reason": request.reason,
+            "scoring_model_version": _current_scoring_model_version,
+            "arbitrator_mode": "CENTRALIZED",
+            "initial_arbitrator": INITIAL_ARBITRATOR,
+            "created_at": created_at,
+        }
+        hedera_status, hedera_txn_id = await _notarize_dispute_payload(payload)
+
+        stored = {
+            "record_id": request.record_id,
+            "status": "OPEN",
+            "bond": request.bond,
+            "challenger": request.challenger,
+            "resolver": None,
+            "verdict": None,
+            "hedera_status": hedera_status,
+            "hedera_txn_id": hedera_txn_id,
+            "scoring_model_version": _current_scoring_model_version,
+            "created_at": created_at,
+            "resolved_at": None,
+        }
+        _disputes[request.record_id] = stored
+
+    return DisputeResponse(**stored)
+
+
+@app.post("/disputes/resolve", response_model=DisputeResponse)
+async def resolve_dispute(request: ResolveDisputeRequest) -> DisputeResponse:
+    async with _disputes_lock:
+        dispute = _disputes.get(request.record_id)
+        if not dispute:
+            raise HTTPException(status_code=404, detail="Dispute not found")
+        if dispute["status"] != "OPEN":
+            raise HTTPException(status_code=409, detail="Dispute already resolved")
+
+        resolved_at = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "record_id": request.record_id,
+            "type": "DISPUTE_RESOLVED",
+            "verdict": request.verdict,
+            "resolver": request.resolver,
+            "notes": request.notes,
+            "scoring_model_version": dispute["scoring_model_version"],
+            "resolved_at": resolved_at,
+        }
+        hedera_status, hedera_txn_id = await _notarize_dispute_payload(payload)
+
+        dispute["status"] = "RESOLVED"
+        dispute["resolver"] = request.resolver
+        dispute["verdict"] = request.verdict
+        dispute["resolved_at"] = resolved_at
+        dispute["hedera_status"] = hedera_status
+        if hedera_txn_id:
+            dispute["hedera_txn_id"] = hedera_txn_id
+
+        return DisputeResponse(**dispute)
 @app.get("/benchmarks/{region}")
 async def get_regional_benchmark(
     region: str,
