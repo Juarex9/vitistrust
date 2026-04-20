@@ -7,7 +7,9 @@
 import os
 import logging
 import asyncio
+import inspect
 import base64
+import time
 from typing import Any
 from functools import wraps
 
@@ -83,25 +85,52 @@ RETRY_DELAYS = [1, 2, 5]
 
 def retry_on_failure(max_retries: int = MAX_RETRIES, delays: list = RETRY_DELAYS):
     def decorator(func):
+        def _log_retry(attempt: int, error: Exception):
+            delay = delays[attempt]
+            logger.warning(
+                f"{func.__name__} failed (attempt {attempt + 1}/{max_retries}), "
+                f"retrying in {delay}s: {error}"
+            )
+            return delay
+
+        def _log_failure(error: Exception):
+            logger.error(f"{func.__name__} failed after {max_retries} attempts: {error}")
+
+        if inspect.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                last_error = None
+                for attempt in range(max_retries):
+                    try:
+                        return await func(*args, **kwargs)
+                    except Exception as e:
+                        last_error = e
+                        if attempt < max_retries - 1:
+                            delay = _log_retry(attempt, e)
+                            await asyncio.sleep(delay)
+                        else:
+                            _log_failure(e)
+                raise last_error
+
+            return async_wrapper
+
         @wraps(func)
-        async def async_wrapper(*args, **kwargs):
+        def sync_wrapper(*args, **kwargs):
             last_error = None
             for attempt in range(max_retries):
                 try:
-                    return await func(*args, **kwargs)
+                    return func(*args, **kwargs)
                 except Exception as e:
                     last_error = e
                     if attempt < max_retries - 1:
-                        delay = delays[attempt]
-                        logger.warning(
-                            f"{func.__name__} failed (attempt {attempt + 1}/{max_retries}), "
-                            f"retrying in {delay}s: {e}"
-                        )
-                        await asyncio.sleep(delay)
+                        delay = _log_retry(attempt, e)
+                        time.sleep(delay)
                     else:
-                        logger.error(f"{func.__name__} failed after {max_retries} attempts: {e}")
+                        _log_failure(e)
             raise last_error
-        return async_wrapper
+
+        return sync_wrapper
+
     return decorator
 
 
