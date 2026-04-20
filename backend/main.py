@@ -18,6 +18,7 @@ import statistics
 from datetime import datetime, timedelta
 import time
 from typing import Any
+from dataclasses import dataclass
 from functools import wraps
 from datetime import UTC, datetime, timedelta
 
@@ -161,6 +162,65 @@ SENTINEL_CLIENT_SECRET = os.getenv("SENTINEL_CLIENT_SECRET", "")
 
 MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 5]
+DEFAULT_SERVICE_TIMEOUTS = {
+    "satellite": float(os.getenv("SATELLITE_TIMEOUT_S", "25")),
+    "ai": float(os.getenv("AI_TIMEOUT_S", "35")),
+    "hedera": float(os.getenv("HEDERA_TIMEOUT_S", "20")),
+    "stellar": float(os.getenv("STELLAR_TIMEOUT_S", "60")),
+}
+
+
+@dataclass
+class CircuitBreaker:
+    name: str
+    failure_threshold: int = 3
+    recovery_timeout_s: float = 60.0
+    failure_count: int = 0
+    opened_at: float = 0.0
+    state: str = "closed"
+
+    def allow_request(self) -> bool:
+        if self.state == "open":
+            if time.monotonic() - self.opened_at >= self.recovery_timeout_s:
+                self.state = "half_open"
+                return True
+            return False
+        return True
+
+    def record_success(self) -> None:
+        self.failure_count = 0
+        self.state = "closed"
+        self.opened_at = 0.0
+
+    def record_failure(self) -> None:
+        self.failure_count += 1
+        if self.failure_count >= self.failure_threshold:
+            self.state = "open"
+            self.opened_at = time.monotonic()
+            logger.warning(f"Circuit breaker opened for {self.name}")
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "state": self.state,
+            "failure_count": self.failure_count,
+            "failure_threshold": self.failure_threshold,
+            "recovery_timeout_s": self.recovery_timeout_s,
+        }
+
+
+SERVICE_BREAKERS: dict[str, CircuitBreaker] = {
+    "satellite": CircuitBreaker("satellite"),
+    "ai": CircuitBreaker("ai"),
+    "hedera": CircuitBreaker("hedera"),
+    "stellar": CircuitBreaker("stellar"),
+}
+
+LATEST_STAGE_METRICS: dict[str, float] = {
+    "satellite_ms": 0.0,
+    "ai_ms": 0.0,
+    "hedera_ms": 0.0,
+    "stellar_ms": 0.0,
+}
 ALERT_HISTORY: dict[str, list[dict[str, Any]]] = {}
 MIN_DISPUTE_BOND = float(os.getenv("MIN_DISPUTE_BOND", "0.01"))
 INITIAL_ARBITRATOR = os.getenv("INITIAL_ARBITRATOR", "INV_ADMIN_MULTISIG")
@@ -257,12 +317,31 @@ async def retry_ai_analysis(sat_data: dict[str, Any]) -> dict[str, Any]:
 
 
 @retry_decorator
-async def retry_hedera(topic_id: str, verdict: dict[str, Any]) -> str:
+async def retry_hedera(topic_id: str, verdict: dict[str, Any]) -> dict[str, str]:
     if not hedera_node:
         raise RuntimeError("Hedera not configured")
     return hedera_node.notarize_vitis_report(topic_id, verdict)
 
 
+async def _execute_with_timeout_and_breaker(
+    service_name: str,
+    operation_coro: Any,
+) -> Any:
+    breaker = SERVICE_BREAKERS[service_name]
+    if not breaker.allow_request():
+        raise RuntimeError(f"{service_name} service temporarily unavailable (circuit breaker open)")
+
+    timeout_s = DEFAULT_SERVICE_TIMEOUTS[service_name]
+    try:
+        result = await asyncio.wait_for(operation_coro, timeout=timeout_s)
+        breaker.record_success()
+        return result
+    except asyncio.TimeoutError as exc:
+        breaker.record_failure()
+        raise RuntimeError(f"{service_name} timeout after {timeout_s}s") from exc
+    except Exception:
+        breaker.record_failure()
+        raise
 async def _notarize_dispute_payload(payload: dict[str, Any]) -> tuple[str, str]:
     topic_id = os.getenv("HEDERA_TOPIC_ID")
     if not topic_id:
@@ -830,7 +909,13 @@ async def health_check() -> dict[str, Any]:
         "status": "healthy",
         "hedera": "unknown",
         "stellar": "unknown",
-        "network": os.getenv("STELLAR_NETWORK", "testnet")
+        "network": os.getenv("STELLAR_NETWORK", "testnet"),
+        "metrics": dict(LATEST_STAGE_METRICS),
+        "timeouts_s": dict(DEFAULT_SERVICE_TIMEOUTS),
+        "circuit_breakers": {
+            name: breaker.snapshot()
+            for name, breaker in SERVICE_BREAKERS.items()
+        },
     }
 
     # Hedera
@@ -879,7 +964,15 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
 
     # 1. Datos satelitales
     logger.info(f"Consulting satellite for {request.lat}, {request.lon}")
-    sat_data = await retry_satellite(request.lat, request.lon)
+    satellite_start = time.perf_counter()
+    try:
+        sat_data = await _execute_with_timeout_and_breaker(
+            "satellite",
+            retry_satellite(request.lat, request.lon),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Satellite service error: {e}") from e
+    LATEST_STAGE_METRICS["satellite_ms"] = round((time.perf_counter() - satellite_start) * 1000, 2)
     if sat_data["status"] == "error":
         logger.error(f"Satellite error: {sat_data['message']}")
         raise HTTPException(status_code=400, detail=sat_data["message"])
@@ -967,7 +1060,19 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
 
     # 3. Análisis con IA
     logger.info("AI analyzing vineyard health")
-    verdict = await retry_ai_analysis(sat_data)
+    satellite_image_task = asyncio.create_task(
+        _get_satellite_image_base64(request.lat, request.lon, ndvi)
+    )
+    ai_start = time.perf_counter()
+    try:
+        verdict = await _execute_with_timeout_and_breaker(
+            "ai",
+            retry_ai_analysis(sat_data),
+        )
+    except Exception as e:
+        satellite_image_task.cancel()
+        raise HTTPException(status_code=503, detail=f"AI service error: {e}") from e
+    LATEST_STAGE_METRICS["ai_ms"] = round((time.perf_counter() - ai_start) * 1000, 2)
 
     # Generar imágenes y evidencia auditable
     satellite_img = await _get_satellite_image_base64(request.lat, request.lon, ndvi, layer="ndvi")
@@ -1004,6 +1109,20 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
     if not hedera_node:
         raise HTTPException(status_code=503, detail="Hedera not configured")
 
+    hedera_start = time.perf_counter()
+    try:
+        hedera_result = await _execute_with_timeout_and_breaker(
+            "hedera",
+            retry_hedera(topic_id, verdict),
+        )
+    except Exception as e:
+        satellite_image_task.cancel()
+        raise HTTPException(status_code=503, detail=f"Hedera service error: {e}") from e
+    LATEST_STAGE_METRICS["hedera_ms"] = round((time.perf_counter() - hedera_start) * 1000, 2)
+    hedera_status = hedera_result.get("status", "UNKNOWN")
+    hedera_txn_id = hedera_result.get("transaction_id", "")
+    if not hedera_txn_id:
+        raise HTTPException(status_code=500, detail="Hedera did not return transaction id")
     hedera_report = {
         **verdict,
         "farm_id": request.farm_id,
@@ -1065,19 +1184,31 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
 
     # Convertir hedera_txn_id a bytes (32 bytes)
     # El transaction ID de Hedera puede ser más largo, lo truncamos o hashamos
-    hedera_txn_bytes = hedera_txn_id.encode()[:32] if hedera_txn_id else b"0" * 32
+    hedera_txn_bytes = hedera_txn_id.encode()[:32].ljust(32, b"0") if hedera_txn_id else b"0" * 32
 
     try:
+        stellar_start = time.perf_counter()
+        stellar_tx_hash = await _execute_with_timeout_and_breaker(
+            "stellar",
+            stellar_adapter.update_vitis_score(
+                farm_id=request.farm_id,
+                score=int(verdict["score"]),
+                hedera_txn_id=hedera_txn_bytes,
+            ),
         stellar_tx_hash = await stellar_adapter.update_vitis_score(
             farm_id=request.farm_id,
             score=int(verdict["score"]),
             hedera_txn_id=hedera_txn_bytes,
             evidence_cid=evidence_upload["evidence_cid"],
         )
+        LATEST_STAGE_METRICS["stellar_ms"] = round((time.perf_counter() - stellar_start) * 1000, 2)
     except Exception as e:
+        satellite_image_task.cancel()
         logger.error(f"Stellar update failed: {e}")
         raise HTTPException(status_code=500, detail=f"Stellar update failed: {e}")
 
+    # Imagen satelital (en paralelo con IA/ledgers)
+    satellite_img = await satellite_image_task
     evidence_index = _read_evidence_index()
     evidence_index[request.farm_id] = {
         "farm_id": request.farm_id,
