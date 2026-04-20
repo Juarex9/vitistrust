@@ -8,6 +8,10 @@ import os
 import logging
 import asyncio
 import base64
+import hashlib
+import json
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from functools import wraps
 
@@ -68,6 +72,7 @@ class AuditResponse(BaseModel):
     hedera_notarization: str
     stellar_tx_hash: str
     hedera_txn_id: str
+    evidence_cid: str
     status: str
 
 # ============================================
@@ -154,6 +159,7 @@ async def retry_hedera(topic_id: str, verdict: dict[str, Any]) -> str:
 SENTINEL_TOKEN_URL = "https://services.sentinel-hub.com/oauth/token"
 SENTINEL_PROCESS_URL = "https://services.sentinel-hub.com/api/v1/process"
 _token_cache = {"token": None, "expires": 0}
+EVIDENCE_INDEX_PATH = Path("backend/data/evidence_index.json")
 
 
 async def _get_sentinel_token() -> str | None:
@@ -371,6 +377,122 @@ async def _get_satellite_image_base64(lat: float, lon: float, ndvi: float, layer
     return f"data:image/svg+xml;base64,{base64.b64encode(svg_bytes).decode()}"
 
 
+def _decode_data_uri_image(data_uri: str) -> tuple[bytes, str]:
+    header, encoded = data_uri.split(",", 1)
+    mime_type = header.split(";")[0].replace("data:", "")
+    return base64.b64decode(encoded), mime_type
+
+
+def _read_evidence_index() -> dict[str, Any]:
+    if not EVIDENCE_INDEX_PATH.exists():
+        return {}
+    return json.loads(EVIDENCE_INDEX_PATH.read_text(encoding="utf-8"))
+
+
+def _write_evidence_index(index_data: dict[str, Any]) -> None:
+    EVIDENCE_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+    EVIDENCE_INDEX_PATH.write_text(
+        json.dumps(index_data, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _compute_file_sha256(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _build_evidence_payload(
+    farm_id: str,
+    lat: float,
+    lon: float,
+    ndvi: float,
+    ndmi: float,
+    justification: str,
+    processed_image_bytes: bytes,
+    processed_image_mime: str,
+) -> dict[str, Any]:
+    timestamp = datetime.now(tz=timezone.utc).isoformat()
+    image_hash = _compute_file_sha256(processed_image_bytes)
+    return {
+        "farm_id": farm_id,
+        "coordinates": {"lat": lat, "lon": lon},
+        "indices": {"ndvi": ndvi, "ndmi": ndmi},
+        "ai_justification": justification,
+        "processed_image": {
+            "mime_type": processed_image_mime,
+            "sha256": image_hash,
+        },
+        "hashes": {
+            "payload_sha256": _compute_file_sha256(
+                json.dumps(
+                    {
+                        "farm_id": farm_id,
+                        "coordinates": {"lat": lat, "lon": lon},
+                        "indices": {"ndvi": ndvi, "ndmi": ndmi},
+                        "ai_justification": justification,
+                        "processed_image_sha256": image_hash,
+                    },
+                    sort_keys=True,
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            )
+        },
+        "timestamp": timestamp,
+    }
+
+
+async def _upload_evidence_to_ipfs(
+    evidence_payload: dict[str, Any],
+    processed_image_bytes: bytes,
+    image_mime_type: str,
+) -> dict[str, str]:
+    provider_url = os.getenv("PINNING_PROVIDER_URL")
+    provider_token = os.getenv("PINNING_PROVIDER_TOKEN", "")
+    gateway_base = os.getenv("IPFS_GATEWAY_BASE", "https://ipfs.io/ipfs")
+
+    if not provider_url:
+        logger.warning("PINNING_PROVIDER_URL missing, using deterministic mock CID")
+        digest = _compute_file_sha256(json.dumps(evidence_payload, sort_keys=True).encode("utf-8"))
+        mock_cid = f"mockcid-{digest[:46]}"
+        return {
+            "evidence_cid": mock_cid,
+            "evidence_json_cid": mock_cid,
+            "image_cid": f"mockimg-{digest[:46]}",
+            "gateway_url": f"{gateway_base}/{mock_cid}",
+            "provider": "mock",
+        }
+
+    headers: dict[str, str] = {}
+    if provider_token:
+        headers["Authorization"] = f"Bearer {provider_token}"
+
+    files = {
+        "file": ("evidence.json", json.dumps(evidence_payload, indent=2).encode("utf-8"), "application/json")
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        json_resp = await client.post(provider_url, files=files, headers=headers)
+        json_resp.raise_for_status()
+        evidence_json_cid = json_resp.json().get("cid") or json_resp.json().get("IpfsHash")
+
+        image_files = {
+            "file": ("processed_image", processed_image_bytes, image_mime_type)
+        }
+        image_resp = await client.post(provider_url, files=image_files, headers=headers)
+        image_resp.raise_for_status()
+        image_cid = image_resp.json().get("cid") or image_resp.json().get("IpfsHash")
+
+    if not evidence_json_cid or not image_cid:
+        raise RuntimeError("Pinning provider did not return CID")
+
+    return {
+        "evidence_cid": evidence_json_cid,
+        "evidence_json_cid": evidence_json_cid,
+        "image_cid": image_cid,
+        "gateway_url": f"{gateway_base}/{evidence_json_cid}",
+        "provider": provider_url,
+    }
+
+
 # ============================================
 # Endpoints
 # ============================================
@@ -456,7 +578,34 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
     logger.info("AI analyzing vineyard health")
     verdict = await retry_ai_analysis(sat_data)
 
-    # 4. Notarización en Hedera (Trust Layer)
+    # Generar imágenes y evidencia auditable
+    satellite_img = await _get_satellite_image_base64(request.lat, request.lon, ndvi, layer="ndvi")
+    ndmi_img = await _get_satellite_image_base64(request.lat, request.lon, ndvi, layer="ndmi")
+    ndmi = round(max(-1.0, min(1.0, (ndvi - 0.2) * 0.8)), 3)
+
+    processed_image_bytes, processed_image_mime = _decode_data_uri_image(ndmi_img)
+    evidence_payload = _build_evidence_payload(
+        farm_id=request.farm_id,
+        lat=request.lat,
+        lon=request.lon,
+        ndvi=ndvi,
+        ndmi=ndmi,
+        justification=verdict["justification"],
+        processed_image_bytes=processed_image_bytes,
+        processed_image_mime=processed_image_mime,
+    )
+
+    try:
+        evidence_upload = await _upload_evidence_to_ipfs(
+            evidence_payload=evidence_payload,
+            processed_image_bytes=processed_image_bytes,
+            image_mime_type=processed_image_mime,
+        )
+    except Exception as e:
+        logger.error(f"Evidence upload failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Evidence upload failed: {e}")
+
+    # 4. Notarización en Hedera (Trust Layer) con CID cruzado
     logger.info("Notarizing in Hedera HCS")
     topic_id = os.getenv("HEDERA_TOPIC_ID")
     if not topic_id:
@@ -464,8 +613,15 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
     if not hedera_node:
         raise HTTPException(status_code=503, detail="Hedera not configured")
 
-    hedera_status = await retry_hedera(topic_id, verdict)
-    hedera_txn_id = verdict.get("hedera_txn_id", "")
+    hedera_report = {
+        **verdict,
+        "farm_id": request.farm_id,
+        "evidence_cid": evidence_upload["evidence_cid"],
+        "evidence_json_cid": evidence_upload["evidence_json_cid"],
+        "evidence_image_cid": evidence_upload["image_cid"],
+    }
+    hedera_status = await retry_hedera(topic_id, hedera_report)
+    hedera_txn_id = hedera_report.get("hedera_txn_id", "")
 
     # 5. Actualizar en Stellar Soroban (Asset Layer)
     logger.info("Updating VitisScore in Stellar Soroban")
@@ -479,13 +635,23 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
             farm_id=request.farm_id,
             score=int(verdict["score"]),
             hedera_txn_id=hedera_txn_bytes,
+            evidence_cid=evidence_upload["evidence_cid"],
         )
     except Exception as e:
         logger.error(f"Stellar update failed: {e}")
         raise HTTPException(status_code=500, detail=f"Stellar update failed: {e}")
 
-    # Imagen satelital
-    satellite_img = await _get_satellite_image_base64(request.lat, request.lon, ndvi)
+    evidence_index = _read_evidence_index()
+    evidence_index[request.farm_id] = {
+        "farm_id": request.farm_id,
+        "evidence_cid": evidence_upload["evidence_cid"],
+        "evidence_json_cid": evidence_upload["evidence_json_cid"],
+        "image_cid": evidence_upload["image_cid"],
+        "gateway_url": evidence_upload["gateway_url"],
+        "timestamp": evidence_payload["timestamp"],
+        "provider": evidence_upload["provider"],
+    }
+    _write_evidence_index(evidence_index)
 
     logger.info(f"Audit complete. TX: {stellar_tx_hash}")
 
@@ -498,6 +664,7 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
         hedera_notarization=hedera_status,
         stellar_tx_hash=stellar_tx_hash,
         hedera_txn_id=hedera_txn_id,
+        evidence_cid=evidence_upload["evidence_cid"],
         status="ASSET_CERTIFIED"
     )
 
@@ -546,6 +713,34 @@ async def get_certificate(farm_id: str) -> dict[str, Any]:
     except Exception as e:
         logger.error(f"Certificate query failed: {e}")
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/evidence/{farm_id}")
+async def get_evidence(farm_id: str) -> dict[str, Any]:
+    """
+    Resuelve el CID de evidencia por farm_id y devuelve links verificables.
+    """
+    gateway_base = os.getenv("IPFS_GATEWAY_BASE", "https://ipfs.io/ipfs")
+    evidence_index = _read_evidence_index()
+    entry = evidence_index.get(farm_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Evidence not found for farm_id")
+
+    evidence_cid = entry["evidence_cid"]
+    evidence_json_cid = entry.get("evidence_json_cid", evidence_cid)
+    image_cid = entry.get("image_cid")
+
+    return {
+        "farm_id": farm_id,
+        "evidence_cid": evidence_cid,
+        "evidence_json_cid": evidence_json_cid,
+        "image_cid": image_cid,
+        "gateway_url": entry.get("gateway_url", f"{gateway_base}/{evidence_cid}"),
+        "evidence_json_url": f"{gateway_base}/{evidence_json_cid}",
+        "processed_image_url": f"{gateway_base}/{image_cid}" if image_cid else None,
+        "timestamp": entry.get("timestamp"),
+        "provider": entry.get("provider"),
+    }
 
 
 # ============================================

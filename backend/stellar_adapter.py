@@ -177,6 +177,7 @@ class SorobanAdapter:
         farm_id: str,
         score: int,
         hedera_txn_id: bytes,
+        evidence_cid: str,
     ) -> str:
         """
         Actualiza el VitisScore de un viñedo en el contrato Soroban.
@@ -204,7 +205,8 @@ class SorobanAdapter:
             [
                 farm_id,
                 score,
-                hedera_txn_id
+                hedera_txn_id,
+                evidence_cid,
             ]
         )
         
@@ -222,7 +224,7 @@ class SorobanAdapter:
         Consulta el VitisScore de un viñedo.
         
         Returns:
-            Dict con score, timestamp, hedera_txn_id, auditor
+            Dict con score, timestamp, hedera_txn_id, evidence_cid, auditor
         """
         logger.info(f"Querying VitisScore for {farm_id}")
         
