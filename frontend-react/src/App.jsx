@@ -12,7 +12,7 @@ const translations = {
   en: {
     nav: { home: 'Home', howItWorks: 'How it works', verify: 'Verify', about: 'About us' },
     form: { title: 'Verify Vineyard', subtitle: 'Run a full audit for any tokenized vineyard asset', lat: 'Latitude', lon: 'Longitude', farm: 'Farm ID', asset: 'Asset Address (optional)', token: 'Token ID', button: 'Run Verification', tabVerify: 'New Audit', tabCheck: 'Verify Certificate' },
-    result: { status: 'CERTIFIED', score: 'VitisScore', loading: 'Verifying...', error: 'Verification Failed', existing: 'EXISTING CERTIFICATE' },
+    result: { status: 'CERTIFIED', score: 'VitisScore', loading: 'Verifying...', error: 'Verification Failed', existing: 'EXISTING CERTIFICATE', comparedRegion: 'Compared to region', percentile: 'NDVI Percentile', delta: 'Delta vs Avg' },
     stats: { satellites: 'Satellites', networks: 'Networks', audits: 'Audits' },
     hero: { title: 'VitisTrust', subtitle: 'Decentralized Oracle', description: 'We verify tokenized vineyards using satellite data and AI. Every audit is recorded immutably on Hedera (Trust Layer) and Stellar Soroban (Asset Layer).' },
     features: { title: 'Features', sat: { title: 'Satellite Data', desc: '10m resolution Sentinel-2 images. Objective NDVI analysis.' }, ai: { title: 'AI Analysis', desc: 'DeepSeek-R1 generates VitisScore (0-100) with detailed justification.' }, chain: { title: 'Blockchains', desc: 'Hedera HCS (notarization) + Stellar Soroban (on-chain storage).' }, invest: { title: 'Investment Analysis', desc: 'BUY/HOLD/SELL recommendations based on real data.' } },
@@ -25,7 +25,7 @@ const translations = {
   es: {
     nav: { home: 'Home', howItWorks: 'Cómo funciona', verify: 'Verificar', about: 'Sobre nosotros' },
     form: { title: 'Verificar Viñedo', subtitle: 'Ejecuta una auditoría completa para cualquier activo tokenizado', lat: 'Latitud', lon: 'Longitud', farm: 'ID del Viñedo', asset: 'Dirección del Activo (opcional)', token: 'ID de Token', button: 'Ejecutar Verificación', tabVerify: 'Nueva Auditoría', tabCheck: 'Verificar Certificado' },
-    result: { status: 'CERTIFICADO', score: 'VitisScore', loading: 'Verificando...', error: 'Verificación Fallida', existing: 'CERTIFICADO EXISTENTE' },
+    result: { status: 'CERTIFICADO', score: 'VitisScore', loading: 'Verificando...', error: 'Verificación Fallida', existing: 'CERTIFICADO EXISTENTE', comparedRegion: 'Comparado con la región', percentile: 'Percentil NDVI', delta: 'Delta vs Promedio' },
     stats: { satellites: 'Satélites', networks: 'Redes', audits: 'Auditorías' },
     hero: { title: 'VitisTrust', subtitle: 'Oráculo Descentralizado', description: 'Verificamos viñedos tokenizados usando datos satelitales e IA. Cada auditoría queda registrada de forma inmutable en Hedera (Trust Layer) y Stellar Soroban (Asset Layer).' },
     features: { title: 'Características', sat: { title: 'Datos Satelitales', desc: 'Imágenes Sentinel-2 de 10m. Análisis NDVI objetivo.' }, ai: { title: 'Análisis IA', desc: 'DeepSeek-R1 genera VitisScore (0-100) con justificación.' }, chain: { title: 'Blockchains', desc: 'Hedera HCS (notarización) + Stellar Soroban (storage on-chain).' }, invest: { title: 'Análisis de Inversión', desc: 'Recomendaciones BUY/HOLD/SELL basadas en datos reales.' } },
@@ -35,7 +35,6 @@ const translations = {
     about: { title: 'Sobre Nosotros', mission: { title: 'Misión', desc: 'Traer transparencia al mercado de vinos tokenizados.' }, vision: { title: 'Visión', desc: 'Ser el estándar de verificación para activos agrícolas en Web3.' }, values: { title: 'Valores', desc: 'Transparencia, descentralización, datos objetivos e innovación.' } },
     footer: { network: 'Hedera + Stellar Testnet', rights: '© 2026 VitisTrust' }
   }
-}
 }
 
 function App() {
