@@ -400,6 +400,7 @@ async def health_check() -> dict[str, Any]:
     # Stellar
     if stellar_adapter is not None:
         health["stellar"] = "configured"
+        health["stellar_metrics"] = stellar_adapter.get_metrics()
     else:
         health["stellar"] = "not configured"
 
