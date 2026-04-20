@@ -7,22 +7,34 @@
 import os
 import logging
 import asyncio
+import inspect
 import base64
 from datetime import datetime, timezone
+import statistics
+from datetime import datetime, timedelta
+import time
 from typing import Any
 from functools import wraps
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agents.perception_agent import get_real_ndvi
-from agents.reasoning_agent import analyze_vineyard_health
+from agents.reasoning_agent import SCORE_MODEL_VERSION, analyze_vineyard_health
 from agents.protocol_agent import HederaProtocol
-from agents.validation_agent import validate_vineyard
+from agents.validation_agent import validate_geolocation, validate_vineyard
+from backend.benchmarks import compute_regional_benchmark, get_region_baseline, list_benchmarks
+from agents.validation_agent import (
+    validate_vineyard,
+    validate_geolocation,
+    validate_vegetation,
+)
 from backend.stellar_adapter import create_stellar_adapter, SorobanAdapter
+from backend.time_window import build_time_window, format_iso_utc, parse_iso_datetime
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -59,6 +71,23 @@ class AuditRequest(BaseModel):
     asset_address: str | None = None  # Mantenido por compatibilidad
     token_id: int | None = None
 
+class AlertEvidence(BaseModel):
+    """Evidencia cuantitativa de la alerta."""
+    current_ndvi: float
+    baseline_ndvi: float | None = None
+    change: float | None = None
+    moving_avg_3m: float | None = None
+
+
+class AlertItem(BaseModel):
+    """Alerta de salud del viñedo."""
+    rule_id: str
+    severity: str
+    title: str
+    probable_cause: str
+    triggered_at: str
+    evidence: AlertEvidence
+
 class AuditResponse(BaseModel):
     """Response de auditoría."""
     vitis_score: int
@@ -69,7 +98,16 @@ class AuditResponse(BaseModel):
     hedera_notarization: str
     stellar_tx_hash: str
     hedera_txn_id: str
+    score_model_version: str
+    score_breakdown: dict[str, Any]
     status: str
+    alerts: list[AlertItem] = Field(default_factory=list)
+    regional_benchmark: dict[str, Any]
+    investment_analysis: dict[str, Any] | None = None
+    validation: dict[str, Any] | None = None
+    lat: float | None = None
+    lon: float | None = None
+    source: str | None = None
 
 
 class OpenDisputeRequest(BaseModel):
@@ -124,25 +162,52 @@ _current_scoring_model_version = int(os.getenv("SCORING_MODEL_VERSION", "1"))
 
 def retry_on_failure(max_retries: int = MAX_RETRIES, delays: list = RETRY_DELAYS):
     def decorator(func):
+        def _log_retry(attempt: int, error: Exception):
+            delay = delays[attempt]
+            logger.warning(
+                f"{func.__name__} failed (attempt {attempt + 1}/{max_retries}), "
+                f"retrying in {delay}s: {error}"
+            )
+            return delay
+
+        def _log_failure(error: Exception):
+            logger.error(f"{func.__name__} failed after {max_retries} attempts: {error}")
+
+        if inspect.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                last_error = None
+                for attempt in range(max_retries):
+                    try:
+                        return await func(*args, **kwargs)
+                    except Exception as e:
+                        last_error = e
+                        if attempt < max_retries - 1:
+                            delay = _log_retry(attempt, e)
+                            await asyncio.sleep(delay)
+                        else:
+                            _log_failure(e)
+                raise last_error
+
+            return async_wrapper
+
         @wraps(func)
-        async def async_wrapper(*args, **kwargs):
+        def sync_wrapper(*args, **kwargs):
             last_error = None
             for attempt in range(max_retries):
                 try:
-                    return await func(*args, **kwargs)
+                    return func(*args, **kwargs)
                 except Exception as e:
                     last_error = e
                     if attempt < max_retries - 1:
-                        delay = delays[attempt]
-                        logger.warning(
-                            f"{func.__name__} failed (attempt {attempt + 1}/{max_retries}), "
-                            f"retrying in {delay}s: {e}"
-                        )
-                        await asyncio.sleep(delay)
+                        delay = _log_retry(attempt, e)
+                        time.sleep(delay)
                     else:
-                        logger.error(f"{func.__name__} failed after {max_retries} attempts: {e}")
+                        _log_failure(e)
             raise last_error
-        return async_wrapper
+
+        return sync_wrapper
+
     return decorator
 
 
@@ -319,42 +384,106 @@ async def _fetch_sentinel_image(
     lat: float,
     lon: float,
     evalscript: str = NDVI_EVALSCRIPT,
-    date_from: str = "2025-10-01T00:00:00Z",
-    date_to: str = "2026-03-26T23:59:59Z"
+    date_from: str | None = None,
+    date_to: str | None = None
 ) -> bytes | None:
     offset = 0.005
     bbox = [lon - offset, lat - offset, lon + offset, lat + offset]
 
-    payload = {
-        "input": {
-            "bounds": {
-                "bbox": bbox,
-                "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"}
-            },
-            "data": [{
-                "type": "sentinel-2-l2a",
-                "dataFilter": {
-                    "timeRange": {"from": date_from, "to": date_to},
-                    "maxCloudCoverage": 20
-                }
-            }]
-        },
-        "output": {"responses": [{"identifier": "default", "format": {"type": "image/png"}}]},
-        "evalscript": evalscript
-    }
+    requested_from, requested_to = (
+        (date_from, date_to) if date_from and date_to else build_time_window(180)
+    )
+    fallback_from, fallback_to = build_time_window(365)
+    windows: list[tuple[str, str, str]] = [
+        (requested_from, requested_to, "requested"),
+        (fallback_from, fallback_to, "fallback-expanded"),
+    ]
 
     try:
         async with httpx.AsyncClient(timeout=45) as client:
-            resp = await client.post(
-                SENTINEL_PROCESS_URL,
-                json=payload,
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            )
-            if resp.status_code == 200 and len(resp.content) > 500:
-                return resp.content
+            for current_from, current_to, window_label in windows:
+                logger.info(
+                    "Satellite image query window=%s from=%s to=%s lat=%s lon=%s",
+                    window_label,
+                    current_from,
+                    current_to,
+                    lat,
+                    lon,
+                )
+
+                payload = {
+                    "input": {
+                        "bounds": {
+                            "bbox": bbox,
+                            "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"}
+                        },
+                        "data": [{
+                            "type": "sentinel-2-l2a",
+                            "dataFilter": {
+                                "timeRange": {"from": current_from, "to": current_to},
+                                "maxCloudCoverage": 20
+                            }
+                        }]
+                    },
+                    "output": {"responses": [{"identifier": "default", "format": {"type": "image/png"}}]},
+                    "evalscript": evalscript
+                }
+
+                resp = await client.post(
+                    SENTINEL_PROCESS_URL,
+                    json=payload,
+                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                )
+                if resp.status_code == 200 and len(resp.content) > 500:
+                    return resp.content
+                logger.warning(
+                    "Sentinel image empty for window=%s from=%s to=%s status=%s size=%s",
+                    window_label,
+                    current_from,
+                    current_to,
+                    resp.status_code,
+                    len(resp.content),
+                )
     except Exception as e:
         logger.warning(f"Error downloading image: {e}")
     return None
+
+
+def _resolve_window(
+    date: str | None = None,
+    from_param: str | None = None,
+    to_param: str | None = None,
+) -> tuple[str, str]:
+    if from_param or to_param:
+        if not from_param or not to_param:
+            raise HTTPException(
+                status_code=422,
+                detail="Both 'from' and 'to' query params are required when overriding time window",
+            )
+        try:
+            parsed_from = parse_iso_datetime(from_param)
+            parsed_to = parse_iso_datetime(to_param)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid ISO datetime format for 'from'/'to': {exc}",
+            ) from exc
+
+        if parsed_from >= parsed_to:
+            raise HTTPException(
+                status_code=422,
+                detail="'from' must be earlier than 'to'",
+            )
+        return format_iso_utc(parsed_from), format_iso_utc(parsed_to)
+
+    if date:
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=UTC)
+            return build_time_window(days_back=60, end=target_date + timedelta(days=30))
+        except ValueError:
+            logger.warning("Invalid date format for /satellite-image date=%s, using default window", date)
+
+    return build_time_window(180)
 
 
 def _generate_placeholder_svg(lat: float, lon: float, ndvi: float, layer: str = "ndvi") -> bytes:
@@ -423,6 +552,144 @@ async def _get_satellite_image_base64(lat: float, lon: float, ndvi: float, layer
     return f"data:image/svg+xml;base64,{base64.b64encode(svg_bytes).decode()}"
 
 
+
+
+def _build_history_point(lat: float, lon: float, offset_months: int, now: datetime) -> dict[str, Any]:
+    target_date = now - timedelta(days=30 * offset_months)
+    seed = int(abs(lat * lon * 1000000 + offset_months * 1000) % 10000)
+    base_ndvi = 0.55 + (seed / 100000) - 0.05
+
+    month = target_date.month
+    if month in [3, 4, 5]:
+        seasonal_adjustment = 0.1
+    elif month in [11, 12, 1, 2]:
+        seasonal_adjustment = -0.15
+    else:
+        seasonal_adjustment = 0.0
+
+    ndvi_value = max(0.1, min(0.9, base_ndvi + seasonal_adjustment))
+    return {
+        "date": target_date.strftime("%Y-%m"),
+        "ndvi": round(ndvi_value, 3),
+        "status": "healthy" if ndvi_value > 0.6 else "moderate" if ndvi_value > 0.4 else "stressed",
+    }
+
+
+def _enrich_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for idx, point in enumerate(history):
+        if idx == 0:
+            point["monthly_change"] = None
+        else:
+            point["monthly_change"] = round(point["ndvi"] - history[idx - 1]["ndvi"], 3)
+
+        window = history[max(0, idx - 2): idx + 1]
+        point["moving_avg_3m"] = round(sum(item["ndvi"] for item in window) / len(window), 3)
+    return history
+
+
+def _build_ndvi_history(lat: float, lon: float, months: int, now: datetime | None = None) -> list[dict[str, Any]]:
+    now = now or datetime.now()
+    raw_history = [
+        _build_history_point(lat, lon, i, now)
+        for i in range(min(months, 24))
+    ]
+    raw_history.reverse()
+    return _enrich_history(raw_history)
+
+
+def _evaluate_alerts(history: list[dict[str, Any]], reference_date: str | None = None) -> list[dict[str, Any]]:
+    if not history:
+        return []
+
+    current = history[-1]
+    alerts: list[dict[str, Any]] = []
+    triggered_at = reference_date or current["date"]
+
+    if len(history) >= 3:
+        baseline = history[-3]["ndvi"]
+        change_2m = round(current["ndvi"] - baseline, 3)
+        if change_2m <= -0.12:
+            alerts.append({
+                "rule_id": "drop_2m_gt_0_12",
+                "severity": "high",
+                "title": "Caída abrupta de vigor",
+                "probable_cause": "Estrés hídrico o evento climático reciente.",
+                "triggered_at": triggered_at,
+                "evidence": {
+                    "current_ndvi": current["ndvi"],
+                    "baseline_ndvi": baseline,
+                    "change": change_2m,
+                    "moving_avg_3m": current.get("moving_avg_3m"),
+                },
+            })
+
+    if current["ndvi"] < 0.35:
+        alerts.append({
+            "rule_id": "critical_low_ndvi",
+            "severity": "high",
+            "title": "NDVI críticamente bajo",
+            "probable_cause": "Daño foliar, plaga o estrés hídrico severo.",
+            "triggered_at": triggered_at,
+            "evidence": {
+                "current_ndvi": current["ndvi"],
+                "baseline_ndvi": None,
+                "change": None,
+                "moving_avg_3m": current.get("moving_avg_3m"),
+            },
+        })
+
+    if len(history) >= 4:
+        last_changes = [point.get("monthly_change", 0) for point in history[-3:]]
+        total_change = round(sum(last_changes), 3)
+        if all(change is not None and change < 0 for change in last_changes) and total_change <= -0.15:
+            alerts.append({
+                "rule_id": "persistent_decline_3m",
+                "severity": "medium",
+                "title": "Deterioro sostenido",
+                "probable_cause": "Problemas de manejo agronómico o déficit hídrico acumulado.",
+                "triggered_at": triggered_at,
+                "evidence": {
+                    "current_ndvi": current["ndvi"],
+                    "baseline_ndvi": history[-4]["ndvi"],
+                    "change": total_change,
+                    "moving_avg_3m": current.get("moving_avg_3m"),
+                },
+            })
+
+    if len(history) >= 6:
+        recent = [point["ndvi"] for point in history[-6:]]
+        volatility = statistics.pstdev(recent)
+        if volatility >= 0.1:
+            alerts.append({
+                "rule_id": "high_ndvi_volatility",
+                "severity": "low",
+                "title": "Alta volatilidad de NDVI",
+                "probable_cause": "Variabilidad fenológica o heterogeneidad del lote.",
+                "triggered_at": triggered_at,
+                "evidence": {
+                    "current_ndvi": current["ndvi"],
+                    "baseline_ndvi": round(sum(recent) / len(recent), 3),
+                    "change": round(volatility, 3),
+                    "moving_avg_3m": current.get("moving_avg_3m"),
+                },
+            })
+
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    alerts.sort(key=lambda alert: severity_order.get(alert["severity"], 3))
+    return alerts
+
+
+def _build_alert_evidence(alerts: list[dict[str, Any]], ndvi: float) -> dict[str, Any]:
+    if not alerts:
+        return {"has_alerts": False, "ndvi": round(ndvi, 3)}
+
+    return {
+        "has_alerts": True,
+        "alert_count": len(alerts),
+        "highest_severity": alerts[0]["severity"],
+        "rules": [alert["rule_id"] for alert in alerts],
+        "ndvi": round(ndvi, 3),
+    }
 # ============================================
 # Endpoints
 # ============================================
@@ -452,6 +719,7 @@ async def health_check() -> dict[str, Any]:
     # Stellar
     if stellar_adapter is not None:
         health["stellar"] = "configured"
+        health["stellar_metrics"] = stellar_adapter.get_metrics()
     else:
         health["stellar"] = "not configured"
 
@@ -490,18 +758,82 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
         raise HTTPException(status_code=400, detail=sat_data["message"])
 
     ndvi = sat_data.get("ndvi", 0)
+    history_for_alerts = _build_ndvi_history(request.lat, request.lon, 6)
+    alerts = _evaluate_alerts(history_for_alerts, reference_date=datetime.now().strftime("%Y-%m"))
+    geolocation = validate_geolocation(request.lat, request.lon)
+    regional_benchmark = compute_regional_benchmark(
+        ndvi=ndvi,
+        region_key=geolocation.get("region_key"),
+        region_name=geolocation.get("region"),
+    )
 
-    # 2. Validación (opcional - mantener si se usa asset_address)
+    # 2. Validación (siempre se devuelve un objeto consistente)
+    validation_result: dict[str, Any] = {
+        "all_valid": False,
+        "can_verify": False,
+        "validations": {
+            "geolocation": validate_geolocation(request.lat, request.lon),
+            "vegetation": validate_vegetation(ndvi),
+            "contract": None,
+            "token": None,
+            "certificate": None,
+        },
+    }
+
     if request.asset_address and request.token_id:
-        # La validación original con coordenadas
-        validation_result = validate_vineyard(
-            request.lat, request.lon, ndvi,
-            request.asset_address, request.token_id,
-            None, None  # Sin web3
+        # Validación extendida si además se recibe información de asset/token
+        try:
+            full_validation = validate_vineyard(
+                request.lat, request.lon, ndvi,
+                request.asset_address, request.token_id,
+                None, None  # Sin web3
+            )
+        except Exception as exc:
+            logger.warning("Extended validation unavailable: %s", exc)
+            full_validation = {
+                "all_valid": validation_result["all_valid"],
+                "can_verify": validation_result["can_verify"],
+                "validations": {
+                    "contract": {
+                        "valid": False,
+                        "message": "Extended contract validation unavailable",
+                    },
+                    "token": {
+                        "valid": False,
+                        "exists": False,
+                        "message": "Extended token validation unavailable",
+                    },
+                    "certificate": {
+                        "exists": False,
+                        "message": "Extended certificate validation unavailable",
+                    },
+                },
+            }
+        validation_result.update(
+            {
+                "all_valid": full_validation.get("all_valid", validation_result["all_valid"]),
+                "can_verify": full_validation.get("can_verify", validation_result["can_verify"]),
+                "validations": {
+                    **validation_result["validations"],
+                    **full_validation.get("validations", {}),
+                },
+            }
         )
+        regional_benchmark = validation_result["validations"]["regional_benchmark"]
         logger.info(
             f"Validation: geoloc={validation_result['validations']['geolocation']['valid']}, "
             f"vegetation={validation_result['validations']['vegetation']['valid']}"
+        )
+    else:
+        validation_result["all_valid"] = (
+            validation_result["validations"]["geolocation"]["valid"]
+            and validation_result["validations"]["vegetation"]["valid"]
+        )
+        validation_result["can_verify"] = validation_result["all_valid"]
+        logger.info(
+            "Validation (partial): geoloc=%s, vegetation=%s",
+            validation_result["validations"]["geolocation"]["valid"],
+            validation_result["validations"]["vegetation"]["valid"],
         )
 
     # 3. Análisis con IA
@@ -516,7 +848,27 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
     if not hedera_node:
         raise HTTPException(status_code=503, detail="Hedera not configured")
 
-    hedera_status = await retry_hedera(topic_id, verdict)
+    notarization_payload = {
+        "score": verdict["score"],
+        "risk_level": verdict["risk_level"],
+        "justification": verdict["justification"],
+        "alerts_evidence": _build_alert_evidence(alerts, ndvi),
+    }
+    hedera_status = await retry_hedera(topic_id, notarization_payload)
+    hedera_payload = {
+        "farm_id": request.farm_id,
+        "coordinates": {"lat": request.lat, "lon": request.lon},
+        "ndvi": ndvi,
+        "score": verdict.get("score"),
+        "risk_level": verdict.get("risk_level"),
+        "justification": verdict.get("justification"),
+        "score_model_version": verdict.get("score_model_version", SCORE_MODEL_VERSION),
+        "score_breakdown": verdict.get("score_breakdown", {}),
+        "investment_analysis": verdict.get("investment_analysis", {}),
+        "metrics": verdict.get("metrics", {}),
+    }
+
+    hedera_status = await retry_hedera(topic_id, hedera_payload)
     hedera_txn_id = verdict.get("hedera_txn_id", "")
 
     # 5. Actualizar en Stellar Soroban (Asset Layer)
@@ -550,7 +902,18 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
         hedera_notarization=hedera_status,
         stellar_tx_hash=stellar_tx_hash,
         hedera_txn_id=hedera_txn_id,
+        status="ASSET_CERTIFIED",
+        alerts=alerts,
+        regional_benchmark=regional_benchmark,
+        score_model_version=verdict.get("score_model_version", SCORE_MODEL_VERSION),
+        score_breakdown=verdict.get("score_breakdown", {}),
         status="ASSET_CERTIFIED"
+        status="ASSET_CERTIFIED",
+        investment_analysis=verdict.get("investment_analysis"),
+        validation=validation_result,
+        lat=request.lat,
+        lon=request.lon,
+        source=sat_data.get("source"),
     )
 
 
@@ -711,6 +1074,29 @@ async def resolve_dispute(request: ResolveDisputeRequest) -> DisputeResponse:
             dispute["hedera_txn_id"] = hedera_txn_id
 
         return DisputeResponse(**dispute)
+@app.get("/benchmarks/{region}")
+async def get_regional_benchmark(
+    region: str,
+    ndvi: float | None = Query(None, description="Optional NDVI to compute percentile"),
+) -> dict[str, Any]:
+    """Explore static NDVI benchmark by region."""
+    if region.lower() == "all":
+        return {"benchmarks": list_benchmarks()}
+
+    try:
+        baseline = get_region_baseline(region)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    response: dict[str, Any] = {"baseline": baseline}
+    if ndvi is not None:
+        response["comparison"] = compute_regional_benchmark(
+            ndvi=ndvi,
+            region_key=baseline["region_key"],
+            region_name=str(baseline["region"]),
+        )
+
+    return response
 
 
 # ============================================
@@ -723,21 +1109,12 @@ async def satellite_image(
     lon: float = Query(..., description="Longitude"),
     layer: str = Query("ndvi", description="Layer type: ndvi, ndmi, truecolor"),
     date: str = Query(None, description="Date for historical image (YYYY-MM-DD)"),
+    from_: str | None = Query(None, alias="from", description="ISO datetime start (e.g. 2026-01-01T00:00:00Z)"),
+    to: str | None = Query(None, description="ISO datetime end (e.g. 2026-04-20T23:59:59Z)"),
 ):
     """Proxy que devuelve la imagen satelital con diferentes capas."""
-    from datetime import datetime, timedelta
-
-    if date:
-        try:
-            target_date = datetime.strptime(date, "%Y-%m-%d")
-            date_from = (target_date - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            date_to = (target_date + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        except ValueError:
-            date_from = "2025-10-01T00:00:00Z"
-            date_to = "2026-03-26T23:59:59Z"
-    else:
-        date_from = "2025-10-01T00:00:00Z"
-        date_to = "2026-03-26T23:59:59Z"
+    date_from, date_to = _resolve_window(date=date, from_param=from_, to_param=to)
+    logger.info("satellite_image effective window from=%s to=%s lat=%s lon=%s", date_from, date_to, lat, lon)
 
     evalscript = NDVI_EVALSCRIPT
     if layer == "ndmi":
@@ -762,6 +1139,8 @@ async def satellite_image(
 async def satellite_layers(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),
+    from_: str | None = Query(None, alias="from", description="ISO datetime start"),
+    to: str | None = Query(None, description="ISO datetime end"),
 ) -> dict[str, Any]:
     """Devuelve las diferentes capas satelitales (NDVI, NDMI, TrueColor)."""
     layers = {}
@@ -771,8 +1150,8 @@ async def satellite_layers(
         "truecolor": TRUE_COLOR_EVALSCRIPT
     }
 
-    date_from = "2025-10-01T00:00:00Z"
-    date_to = "2026-03-26T23:59:59Z"
+    date_from, date_to = _resolve_window(from_param=from_, to_param=to)
+    logger.info("satellite_layers effective window from=%s to=%s lat=%s lon=%s", date_from, date_to, lat, lon)
 
     token = await _get_sentinel_token()
 
@@ -799,39 +1178,12 @@ async def satellite_history(
     months: int = Query(24, description="Number of months to look back"),
 ) -> dict[str, Any]:
     """Devuelve el historial NDVI de los últimos N meses."""
-    from datetime import datetime, timedelta
-
-    history = []
-    now = datetime.now()
-
-    for i in range(min(months, 24)):
-        target_date = now - timedelta(days=30 * i)
-        date_from = (target_date - timedelta(days=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        date_to = (target_date + timedelta(days=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        seed = int(abs(lat * lon * 1000000 + i * 1000) % 10000)
-        base_ndvi = 0.55 + (seed / 100000) - 0.05
-
-        month = target_date.month
-        if month in [3, 4, 5]:
-            seasonal_adjustment = 0.1
-        elif month in [11, 12, 1, 2]:
-            seasonal_adjustment = -0.15
-        else:
-            seasonal_adjustment = 0.0
-
-        ndvi_value = max(0.1, min(0.9, base_ndvi + seasonal_adjustment))
-
-        history.append({
-            "date": target_date.strftime("%Y-%m"),
-            "ndvi": round(ndvi_value, 3),
-            "status": "healthy" if ndvi_value > 0.6 else "moderate" if ndvi_value > 0.4 else "stressed"
-        })
-
-    history.reverse()
+    history = _build_ndvi_history(lat, lon, months)
+    alerts = _evaluate_alerts(history)
 
     return {
         "history": history,
+        "alerts": alerts,
         "coordinates": {"lat": lat, "lon": lon},
         "months_analyzed": len(history)
     }
