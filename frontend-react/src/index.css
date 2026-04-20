@@ -2113,3 +2113,46 @@ footer {
     font-size: 1.5rem;
   }
 }
+.alerts-panel {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.alerts-title {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.alert-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid;
+  border-radius: 10px;
+  padding: 0.55rem 0.75rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.alert-severity {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #fff;
+  border-radius: 999px;
+  padding: 0.2rem 0.5rem;
+}
+
+.alert-content {
+  min-width: 0;
+}
+
+.alert-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.alert-cause {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}

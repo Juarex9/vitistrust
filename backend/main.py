@@ -8,6 +8,8 @@ import os
 import logging
 import asyncio
 import base64
+import statistics
+from datetime import datetime, timedelta
 from typing import Any
 from functools import wraps
 
@@ -15,7 +17,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agents.perception_agent import get_real_ndvi
 from agents.reasoning_agent import analyze_vineyard_health
@@ -58,6 +60,23 @@ class AuditRequest(BaseModel):
     asset_address: str | None = None  # Mantenido por compatibilidad
     token_id: int | None = None
 
+class AlertEvidence(BaseModel):
+    """Evidencia cuantitativa de la alerta."""
+    current_ndvi: float
+    baseline_ndvi: float | None = None
+    change: float | None = None
+    moving_avg_3m: float | None = None
+
+
+class AlertItem(BaseModel):
+    """Alerta de salud del viñedo."""
+    rule_id: str
+    severity: str
+    title: str
+    probable_cause: str
+    triggered_at: str
+    evidence: AlertEvidence
+
 class AuditResponse(BaseModel):
     """Response de auditoría."""
     vitis_score: int
@@ -69,6 +88,7 @@ class AuditResponse(BaseModel):
     stellar_tx_hash: str
     hedera_txn_id: str
     status: str
+    alerts: list[AlertItem] = Field(default_factory=list)
 
 # ============================================
 # Configuración
@@ -371,6 +391,144 @@ async def _get_satellite_image_base64(lat: float, lon: float, ndvi: float, layer
     return f"data:image/svg+xml;base64,{base64.b64encode(svg_bytes).decode()}"
 
 
+
+
+def _build_history_point(lat: float, lon: float, offset_months: int, now: datetime) -> dict[str, Any]:
+    target_date = now - timedelta(days=30 * offset_months)
+    seed = int(abs(lat * lon * 1000000 + offset_months * 1000) % 10000)
+    base_ndvi = 0.55 + (seed / 100000) - 0.05
+
+    month = target_date.month
+    if month in [3, 4, 5]:
+        seasonal_adjustment = 0.1
+    elif month in [11, 12, 1, 2]:
+        seasonal_adjustment = -0.15
+    else:
+        seasonal_adjustment = 0.0
+
+    ndvi_value = max(0.1, min(0.9, base_ndvi + seasonal_adjustment))
+    return {
+        "date": target_date.strftime("%Y-%m"),
+        "ndvi": round(ndvi_value, 3),
+        "status": "healthy" if ndvi_value > 0.6 else "moderate" if ndvi_value > 0.4 else "stressed",
+    }
+
+
+def _enrich_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for idx, point in enumerate(history):
+        if idx == 0:
+            point["monthly_change"] = None
+        else:
+            point["monthly_change"] = round(point["ndvi"] - history[idx - 1]["ndvi"], 3)
+
+        window = history[max(0, idx - 2): idx + 1]
+        point["moving_avg_3m"] = round(sum(item["ndvi"] for item in window) / len(window), 3)
+    return history
+
+
+def _build_ndvi_history(lat: float, lon: float, months: int, now: datetime | None = None) -> list[dict[str, Any]]:
+    now = now or datetime.now()
+    raw_history = [
+        _build_history_point(lat, lon, i, now)
+        for i in range(min(months, 24))
+    ]
+    raw_history.reverse()
+    return _enrich_history(raw_history)
+
+
+def _evaluate_alerts(history: list[dict[str, Any]], reference_date: str | None = None) -> list[dict[str, Any]]:
+    if not history:
+        return []
+
+    current = history[-1]
+    alerts: list[dict[str, Any]] = []
+    triggered_at = reference_date or current["date"]
+
+    if len(history) >= 3:
+        baseline = history[-3]["ndvi"]
+        change_2m = round(current["ndvi"] - baseline, 3)
+        if change_2m <= -0.12:
+            alerts.append({
+                "rule_id": "drop_2m_gt_0_12",
+                "severity": "high",
+                "title": "Caída abrupta de vigor",
+                "probable_cause": "Estrés hídrico o evento climático reciente.",
+                "triggered_at": triggered_at,
+                "evidence": {
+                    "current_ndvi": current["ndvi"],
+                    "baseline_ndvi": baseline,
+                    "change": change_2m,
+                    "moving_avg_3m": current.get("moving_avg_3m"),
+                },
+            })
+
+    if current["ndvi"] < 0.35:
+        alerts.append({
+            "rule_id": "critical_low_ndvi",
+            "severity": "high",
+            "title": "NDVI críticamente bajo",
+            "probable_cause": "Daño foliar, plaga o estrés hídrico severo.",
+            "triggered_at": triggered_at,
+            "evidence": {
+                "current_ndvi": current["ndvi"],
+                "baseline_ndvi": None,
+                "change": None,
+                "moving_avg_3m": current.get("moving_avg_3m"),
+            },
+        })
+
+    if len(history) >= 4:
+        last_changes = [point.get("monthly_change", 0) for point in history[-3:]]
+        total_change = round(sum(last_changes), 3)
+        if all(change is not None and change < 0 for change in last_changes) and total_change <= -0.15:
+            alerts.append({
+                "rule_id": "persistent_decline_3m",
+                "severity": "medium",
+                "title": "Deterioro sostenido",
+                "probable_cause": "Problemas de manejo agronómico o déficit hídrico acumulado.",
+                "triggered_at": triggered_at,
+                "evidence": {
+                    "current_ndvi": current["ndvi"],
+                    "baseline_ndvi": history[-4]["ndvi"],
+                    "change": total_change,
+                    "moving_avg_3m": current.get("moving_avg_3m"),
+                },
+            })
+
+    if len(history) >= 6:
+        recent = [point["ndvi"] for point in history[-6:]]
+        volatility = statistics.pstdev(recent)
+        if volatility >= 0.1:
+            alerts.append({
+                "rule_id": "high_ndvi_volatility",
+                "severity": "low",
+                "title": "Alta volatilidad de NDVI",
+                "probable_cause": "Variabilidad fenológica o heterogeneidad del lote.",
+                "triggered_at": triggered_at,
+                "evidence": {
+                    "current_ndvi": current["ndvi"],
+                    "baseline_ndvi": round(sum(recent) / len(recent), 3),
+                    "change": round(volatility, 3),
+                    "moving_avg_3m": current.get("moving_avg_3m"),
+                },
+            })
+
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    alerts.sort(key=lambda alert: severity_order.get(alert["severity"], 3))
+    return alerts
+
+
+def _build_alert_evidence(alerts: list[dict[str, Any]], ndvi: float) -> dict[str, Any]:
+    if not alerts:
+        return {"has_alerts": False, "ndvi": round(ndvi, 3)}
+
+    return {
+        "has_alerts": True,
+        "alert_count": len(alerts),
+        "highest_severity": alerts[0]["severity"],
+        "rules": [alert["rule_id"] for alert in alerts],
+        "ndvi": round(ndvi, 3),
+    }
 # ============================================
 # Endpoints
 # ============================================
@@ -438,6 +596,8 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
         raise HTTPException(status_code=400, detail=sat_data["message"])
 
     ndvi = sat_data.get("ndvi", 0)
+    history_for_alerts = _build_ndvi_history(request.lat, request.lon, 6)
+    alerts = _evaluate_alerts(history_for_alerts, reference_date=datetime.now().strftime("%Y-%m"))
 
     # 2. Validación (opcional - mantener si se usa asset_address)
     if request.asset_address and request.token_id:
@@ -464,7 +624,13 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
     if not hedera_node:
         raise HTTPException(status_code=503, detail="Hedera not configured")
 
-    hedera_status = await retry_hedera(topic_id, verdict)
+    notarization_payload = {
+        "score": verdict["score"],
+        "risk_level": verdict["risk_level"],
+        "justification": verdict["justification"],
+        "alerts_evidence": _build_alert_evidence(alerts, ndvi),
+    }
+    hedera_status = await retry_hedera(topic_id, notarization_payload)
     hedera_txn_id = verdict.get("hedera_txn_id", "")
 
     # 5. Actualizar en Stellar Soroban (Asset Layer)
@@ -498,7 +664,8 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
         hedera_notarization=hedera_status,
         stellar_tx_hash=stellar_tx_hash,
         hedera_txn_id=hedera_txn_id,
-        status="ASSET_CERTIFIED"
+        status="ASSET_CERTIFIED",
+        alerts=alerts,
     )
 
 
@@ -634,39 +801,12 @@ async def satellite_history(
     months: int = Query(24, description="Number of months to look back"),
 ) -> dict[str, Any]:
     """Devuelve el historial NDVI de los últimos N meses."""
-    from datetime import datetime, timedelta
-
-    history = []
-    now = datetime.now()
-
-    for i in range(min(months, 24)):
-        target_date = now - timedelta(days=30 * i)
-        date_from = (target_date - timedelta(days=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        date_to = (target_date + timedelta(days=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-        seed = int(abs(lat * lon * 1000000 + i * 1000) % 10000)
-        base_ndvi = 0.55 + (seed / 100000) - 0.05
-
-        month = target_date.month
-        if month in [3, 4, 5]:
-            seasonal_adjustment = 0.1
-        elif month in [11, 12, 1, 2]:
-            seasonal_adjustment = -0.15
-        else:
-            seasonal_adjustment = 0.0
-
-        ndvi_value = max(0.1, min(0.9, base_ndvi + seasonal_adjustment))
-
-        history.append({
-            "date": target_date.strftime("%Y-%m"),
-            "ndvi": round(ndvi_value, 3),
-            "status": "healthy" if ndvi_value > 0.6 else "moderate" if ndvi_value > 0.4 else "stressed"
-        })
-
-    history.reverse()
+    history = _build_ndvi_history(lat, lon, months)
+    alerts = _evaluate_alerts(history)
 
     return {
         "history": history,
+        "alerts": alerts,
         "coordinates": {"lat": lat, "lon": lon},
         "months_analyzed": len(history)
     }
