@@ -50,6 +50,9 @@ export default function VerifySection({ t }) {
     return colors[risk?.toLowerCase()] || '#6b7280'
   }
 
+  const getAlertColor = (severity) => {
+    const colors = { low: '#38bdf8', medium: '#f59e0b', high: '#f43f5e' }
+    return colors[severity?.toLowerCase()] || '#6b7280'
   const breakdownLabels = {
     vegetation: 'Vegetation',
     humidity: 'Humidity',
@@ -229,10 +232,52 @@ export default function VerifySection({ t }) {
                         <div className="tm-stats">
                           <div className="tm-stat"><span className="tm-stat-label">NDVI</span><span className="tm-stat-value">{timeMachineData.history[timeMachineIndex]?.ndvi?.toFixed(3)}</span></div>
                           <div className="tm-stat"><span className="tm-stat-label">Status</span><span className="tm-stat-value">{timeMachineData.history[timeMachineIndex]?.status?.toUpperCase()}</span></div>
+                          <div className="tm-stat">
+                            <span className="tm-stat-label">Δ mensual</span>
+                            <span className={`tm-stat-value ${(timeMachineData.history[timeMachineIndex]?.monthly_change || 0) >= 0 ? 'positive' : 'negative'}`}>
+                              {timeMachineData.history[timeMachineIndex]?.monthly_change == null
+                                ? 'N/A'
+                                : `${timeMachineData.history[timeMachineIndex]?.monthly_change > 0 ? '+' : ''}${timeMachineData.history[timeMachineIndex]?.monthly_change?.toFixed(3)}`}
+                            </span>
+                          </div>
+                          <div className="tm-stat">
+                            <span className="tm-stat-label">Media móvil 3m</span>
+                            <span className="tm-stat-value">{timeMachineData.history[timeMachineIndex]?.moving_avg_3m?.toFixed(3)}</span>
+                          </div>
                         </div>
                       </div>
                     )}
 
+                    {(result.alerts?.length > 0 || timeMachineData?.alerts?.length > 0) && (
+                      <div className="alerts-panel">
+                        <div className="alerts-title">Alertas de salud</div>
+                        {[...(result.alerts || []), ...(timeMachineData?.alerts || [])]
+                          .filter((alert, index, self) => self.findIndex((item) => item.rule_id === alert.rule_id) === index)
+                          .map((alert) => (
+                            <div
+                              key={alert.rule_id}
+                              className="alert-badge"
+                              style={{ borderColor: getAlertColor(alert.severity) }}
+                            >
+                              <span
+                                className="alert-severity"
+                                style={{ backgroundColor: getAlertColor(alert.severity) }}
+                              >
+                                {alert.severity?.toUpperCase()}
+                              </span>
+                              <div className="alert-content">
+                                <div className="alert-title">{alert.title}</div>
+                                <div className="alert-cause">{alert.probable_cause}</div>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+
+                    <div className="quick-validation-grid">
+                      <div className={`val-pill ${result.validation?.geolocation?.valid ? 'ok' : 'warn'}`}>📍 Geo</div>
+                      <div className={`val-pill ${result.validation?.vegetation?.valid ? 'ok' : 'warn'}`}>🌿 NDVI: {result.ndvi?.toFixed(3)}</div>
+                    </div>
                     {result?.validation && (
                       <div className="quick-validation-grid">
                         <div className={`val-pill ${validationGeo?.valid ? 'ok' : 'warn'}`}>📍 Geo</div>
