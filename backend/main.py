@@ -23,6 +23,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from agents.perception_agent import get_real_indices, get_water_stress_level
+from agents.reasoning_agent import analyze_vineyard_health
 from agents.perception_agent import get_real_ndvi
 from agents.reasoning_agent import SCORE_MODEL_VERSION, analyze_vineyard_health
 from agents.protocol_agent import HederaProtocol
@@ -94,6 +96,8 @@ class AuditResponse(BaseModel):
     risk: str
     justification: str
     ndvi: float
+    ndmi: float
+    water_stress_level: str
     satellite_img: str
     hedera_notarization: str
     stellar_tx_hash: str
@@ -152,6 +156,7 @@ SENTINEL_CLIENT_SECRET = os.getenv("SENTINEL_CLIENT_SECRET", "")
 
 MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 5]
+ALERT_HISTORY: dict[str, list[dict[str, Any]]] = {}
 MIN_DISPUTE_BOND = float(os.getenv("MIN_DISPUTE_BOND", "0.01"))
 INITIAL_ARBITRATOR = os.getenv("INITIAL_ARBITRATOR", "INV_ADMIN_MULTISIG")
 
@@ -238,7 +243,7 @@ retry_decorator = retry_on_failure()
 
 @retry_decorator
 async def retry_satellite(lat: float, lon: float) -> dict[str, Any]:
-    return get_real_ndvi(lat, lon)
+    return get_real_indices(lat, lon)
 
 
 @retry_decorator
@@ -735,7 +740,7 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
     Audita un viñedo tokenizado.
 
     Flujo:
-    1. Consulta datos satelitales (NDVI)
+    1. Consulta datos satelitales (NDVI + NDMI)
     2. Valida que el viñedo exista
     3. Analiza con IA (DeepSeek-R1)
     4. Notariza en Hedera HCS (Trust Layer)
@@ -758,6 +763,8 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
         raise HTTPException(status_code=400, detail=sat_data["message"])
 
     ndvi = sat_data.get("ndvi", 0)
+    ndmi = sat_data.get("ndmi", 0)
+    stress_context = get_water_stress_level(ndmi)
     history_for_alerts = _build_ndvi_history(request.lat, request.lon, 6)
     alerts = _evaluate_alerts(history_for_alerts, reference_date=datetime.now().strftime("%Y-%m"))
     geolocation = validate_geolocation(request.lat, request.lon)
@@ -871,6 +878,30 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
     hedera_status = await retry_hedera(topic_id, hedera_payload)
     hedera_txn_id = verdict.get("hedera_txn_id", "")
 
+    report_ref = f"/certificate/{request.farm_id}"
+    if stress_context["level"] == "critical":
+        alert_payload = {
+            "type": "WATER_STRESS",
+            "farm_id": request.farm_id,
+            "lvl": "critical",
+            "ndmi": round(ndmi, 3),
+            "ref": report_ref,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        logger.warning(f"Critical NDMI detected, sending Hedera alert for {request.farm_id}")
+        alert_hedera_status = await retry_hedera(topic_id, alert_payload)
+        ALERT_HISTORY.setdefault(request.farm_id, []).append(
+            {
+                "farm_id": request.farm_id,
+                "level": "critical",
+                "ndmi": round(ndmi, 3),
+                "phenology_stage": stress_context["phenology_stage"],
+                "report_ref": report_ref,
+                "hedera_status": alert_hedera_status,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
     # 5. Actualizar en Stellar Soroban (Asset Layer)
     logger.info("Updating VitisScore in Stellar Soroban")
 
@@ -898,6 +929,8 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
         risk=verdict["risk_level"],
         justification=verdict["justification"],
         ndvi=ndvi,
+        ndmi=ndmi,
+        water_stress_level=stress_context["level"],
         satellite_img=satellite_img,
         hedera_notarization=hedera_status,
         stellar_tx_hash=stellar_tx_hash,
@@ -961,6 +994,16 @@ async def get_certificate(farm_id: str) -> dict[str, Any]:
     except Exception as e:
         logger.error(f"Certificate query failed: {e}")
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/alerts/{farm_id}")
+async def get_alerts(farm_id: str) -> dict[str, Any]:
+    """Devuelve historial de alertas de estrés hídrico para una finca."""
+    return {
+        "farm_id": farm_id,
+        "alerts": ALERT_HISTORY.get(farm_id, []),
+        "count": len(ALERT_HISTORY.get(farm_id, [])),
+    }
 
 
 @app.get("/arbitration/config")
