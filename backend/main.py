@@ -7,7 +7,9 @@
 import os
 import logging
 import asyncio
+import inspect
 import base64
+import time
 from typing import Any
 from functools import wraps
 
@@ -18,9 +20,13 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from agents.perception_agent import get_real_ndvi
-from agents.reasoning_agent import analyze_vineyard_health
+from agents.reasoning_agent import SCORE_MODEL_VERSION, analyze_vineyard_health
 from agents.protocol_agent import HederaProtocol
-from agents.validation_agent import validate_vineyard
+from agents.validation_agent import (
+    validate_vineyard,
+    validate_geolocation,
+    validate_vegetation,
+)
 from backend.stellar_adapter import create_stellar_adapter, SorobanAdapter
 from dotenv import load_dotenv
 
@@ -68,7 +74,14 @@ class AuditResponse(BaseModel):
     hedera_notarization: str
     stellar_tx_hash: str
     hedera_txn_id: str
+    score_model_version: str
+    score_breakdown: dict[str, Any]
     status: str
+    investment_analysis: dict[str, Any] | None = None
+    validation: dict[str, Any] | None = None
+    lat: float | None = None
+    lon: float | None = None
+    source: str | None = None
 
 # ============================================
 # Configuración
@@ -83,25 +96,52 @@ RETRY_DELAYS = [1, 2, 5]
 
 def retry_on_failure(max_retries: int = MAX_RETRIES, delays: list = RETRY_DELAYS):
     def decorator(func):
+        def _log_retry(attempt: int, error: Exception):
+            delay = delays[attempt]
+            logger.warning(
+                f"{func.__name__} failed (attempt {attempt + 1}/{max_retries}), "
+                f"retrying in {delay}s: {error}"
+            )
+            return delay
+
+        def _log_failure(error: Exception):
+            logger.error(f"{func.__name__} failed after {max_retries} attempts: {error}")
+
+        if inspect.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                last_error = None
+                for attempt in range(max_retries):
+                    try:
+                        return await func(*args, **kwargs)
+                    except Exception as e:
+                        last_error = e
+                        if attempt < max_retries - 1:
+                            delay = _log_retry(attempt, e)
+                            await asyncio.sleep(delay)
+                        else:
+                            _log_failure(e)
+                raise last_error
+
+            return async_wrapper
+
         @wraps(func)
-        async def async_wrapper(*args, **kwargs):
+        def sync_wrapper(*args, **kwargs):
             last_error = None
             for attempt in range(max_retries):
                 try:
-                    return await func(*args, **kwargs)
+                    return func(*args, **kwargs)
                 except Exception as e:
                     last_error = e
                     if attempt < max_retries - 1:
-                        delay = delays[attempt]
-                        logger.warning(
-                            f"{func.__name__} failed (attempt {attempt + 1}/{max_retries}), "
-                            f"retrying in {delay}s: {e}"
-                        )
-                        await asyncio.sleep(delay)
+                        delay = _log_retry(attempt, e)
+                        time.sleep(delay)
                     else:
-                        logger.error(f"{func.__name__} failed after {max_retries} attempts: {e}")
+                        _log_failure(e)
             raise last_error
-        return async_wrapper
+
+        return sync_wrapper
+
     return decorator
 
 
@@ -400,6 +440,7 @@ async def health_check() -> dict[str, Any]:
     # Stellar
     if stellar_adapter is not None:
         health["stellar"] = "configured"
+        health["stellar_metrics"] = stellar_adapter.get_metrics()
     else:
         health["stellar"] = "not configured"
 
@@ -439,17 +480,72 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
 
     ndvi = sat_data.get("ndvi", 0)
 
-    # 2. Validación (opcional - mantener si se usa asset_address)
+    # 2. Validación (siempre se devuelve un objeto consistente)
+    validation_result: dict[str, Any] = {
+        "all_valid": False,
+        "can_verify": False,
+        "validations": {
+            "geolocation": validate_geolocation(request.lat, request.lon),
+            "vegetation": validate_vegetation(ndvi),
+            "contract": None,
+            "token": None,
+            "certificate": None,
+        },
+    }
+
     if request.asset_address and request.token_id:
-        # La validación original con coordenadas
-        validation_result = validate_vineyard(
-            request.lat, request.lon, ndvi,
-            request.asset_address, request.token_id,
-            None, None  # Sin web3
+        # Validación extendida si además se recibe información de asset/token
+        try:
+            full_validation = validate_vineyard(
+                request.lat, request.lon, ndvi,
+                request.asset_address, request.token_id,
+                None, None  # Sin web3
+            )
+        except Exception as exc:
+            logger.warning("Extended validation unavailable: %s", exc)
+            full_validation = {
+                "all_valid": validation_result["all_valid"],
+                "can_verify": validation_result["can_verify"],
+                "validations": {
+                    "contract": {
+                        "valid": False,
+                        "message": "Extended contract validation unavailable",
+                    },
+                    "token": {
+                        "valid": False,
+                        "exists": False,
+                        "message": "Extended token validation unavailable",
+                    },
+                    "certificate": {
+                        "exists": False,
+                        "message": "Extended certificate validation unavailable",
+                    },
+                },
+            }
+        validation_result.update(
+            {
+                "all_valid": full_validation.get("all_valid", validation_result["all_valid"]),
+                "can_verify": full_validation.get("can_verify", validation_result["can_verify"]),
+                "validations": {
+                    **validation_result["validations"],
+                    **full_validation.get("validations", {}),
+                },
+            }
         )
         logger.info(
             f"Validation: geoloc={validation_result['validations']['geolocation']['valid']}, "
             f"vegetation={validation_result['validations']['vegetation']['valid']}"
+        )
+    else:
+        validation_result["all_valid"] = (
+            validation_result["validations"]["geolocation"]["valid"]
+            and validation_result["validations"]["vegetation"]["valid"]
+        )
+        validation_result["can_verify"] = validation_result["all_valid"]
+        logger.info(
+            "Validation (partial): geoloc=%s, vegetation=%s",
+            validation_result["validations"]["geolocation"]["valid"],
+            validation_result["validations"]["vegetation"]["valid"],
         )
 
     # 3. Análisis con IA
@@ -464,7 +560,20 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
     if not hedera_node:
         raise HTTPException(status_code=503, detail="Hedera not configured")
 
-    hedera_status = await retry_hedera(topic_id, verdict)
+    hedera_payload = {
+        "farm_id": request.farm_id,
+        "coordinates": {"lat": request.lat, "lon": request.lon},
+        "ndvi": ndvi,
+        "score": verdict.get("score"),
+        "risk_level": verdict.get("risk_level"),
+        "justification": verdict.get("justification"),
+        "score_model_version": verdict.get("score_model_version", SCORE_MODEL_VERSION),
+        "score_breakdown": verdict.get("score_breakdown", {}),
+        "investment_analysis": verdict.get("investment_analysis", {}),
+        "metrics": verdict.get("metrics", {}),
+    }
+
+    hedera_status = await retry_hedera(topic_id, hedera_payload)
     hedera_txn_id = verdict.get("hedera_txn_id", "")
 
     # 5. Actualizar en Stellar Soroban (Asset Layer)
@@ -498,7 +607,15 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
         hedera_notarization=hedera_status,
         stellar_tx_hash=stellar_tx_hash,
         hedera_txn_id=hedera_txn_id,
+        score_model_version=verdict.get("score_model_version", SCORE_MODEL_VERSION),
+        score_breakdown=verdict.get("score_breakdown", {}),
         status="ASSET_CERTIFIED"
+        status="ASSET_CERTIFIED",
+        investment_analysis=verdict.get("investment_analysis"),
+        validation=validation_result,
+        lat=request.lat,
+        lon=request.lon,
+        source=sat_data.get("source"),
     )
 
 
