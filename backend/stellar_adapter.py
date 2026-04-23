@@ -101,7 +101,7 @@ class SorobanAdapter:
         """
         Actualiza el VitisScore de un viñedo en el contrato Soroban.
         
-Returns:
+        Returns:
             Transaction hash
         """
         if not 0 <= score <= 100:
@@ -123,7 +123,7 @@ Returns:
         
         self._metrics.total_submissions += 1
         
-# Por ahora, usar stub mode (WSL tiene problemas de config)
+        # Por ahora, usar stub mode (WSL tiene problemas de config)
         # TODO: habilitar cuando WSL esteja bien configurado
         logger.warning("Using stub mode - WSL not properly configured")
         mock_hash = f"stub_tx_{farm_id}_{int(time.time())}"
@@ -134,10 +134,7 @@ Returns:
         
         logger.info(f"VitisScore updated (stub mode). TX: {mock_hash}")
         return mock_hash
-        except Exception as e:
-            logger.error(f"Soroban transaction error: {e}")
-            raise
-
+    
     async def get_vitis_score(self, farm_id: str) -> dict[str, Any]:
         """Consulta el VitisScore de un viñedo."""
         logger.info(f"Querying VitisScore for {farm_id} (stub)")
