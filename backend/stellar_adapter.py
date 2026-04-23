@@ -163,7 +163,7 @@ class SorobanAdapter:
             "wsl", "bash", "-lc",
             f"stellar contract invoke "
             f"--id {self.config.contract_id} "
-            f"--source {self.config.oracle_secret} "
+            f"--source oracle_account "
             f"--network {self.config.network.value} "
             f"--json -- "
             f"update_score "
