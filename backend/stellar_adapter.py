@@ -99,7 +99,7 @@ class SorobanAdapter:
         """
         Actualiza el VitisScore de un viñedo en el contrato Soroban.
         
-        Returns:
+Returns:
             Transaction hash
         """
         if not 0 <= score <= 100:
@@ -119,7 +119,7 @@ class SorobanAdapter:
                 logger.info(f"Idempotency hit, returning cached: {cached_hash}")
                 return cached_hash
         
-self._metrics.total_submissions += 1
+        self._metrics.total_submissions += 1
         
         logger.info(f"Executing stellar-cli command for {farm_id}")
         
@@ -162,7 +162,6 @@ self._metrics.total_submissions += 1
             tx_hash = response.get("hash") or response.get("transaction_hash", "")
             
             if not tx_hash:
-                # Fallback: intentar extraer de los resultados
                 logger.warning(f"No hash in response, using fallback: {response}")
                 tx_hash = f"tx_{farm_id}_{int(time.time())}"
             
