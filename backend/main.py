@@ -11,7 +11,7 @@ import inspect
 import base64
 import hashlib
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from pathlib import Path
 import statistics
 import time
@@ -1161,6 +1161,25 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
 
     try:
         stellar_start = time.perf_counter()
+
+        # 5a. Registrar ubicación si es la primera certificación
+        has_existing_location = False
+        try:
+            has_existing_location = await stellar_adapter.has_location(request.farm_id)
+        except NotImplementedError:
+            has_existing_location = False  # En stub mode, assumed false
+        
+        if not has_existing_location:
+            logger.info(f"First certification: registering location for {request.farm_id}")
+            geohash = f"{request.lat:.4f},{request.lon:.4f}"  # Simple geohash approximation
+            location_tx_hash = await stellar_adapter.register_location(
+                farm_id=request.farm_id,
+                lat=request.lat,
+                lon=request.lon,
+                geohash=geohash,
+            )
+            logger.info(f"Location registered: {location_tx_hash}")
+
         stellar_tx_hash = await _execute_with_timeout_and_breaker(
             "stellar",
             stellar_adapter.update_vitis_score(
