@@ -150,15 +150,65 @@ class SorobanAdapter:
         evidence_cid: str,
     ) -> str:
         """
-        Envía transacción real a Soroban.
-        
-        Por ahora retorna stub - el SDK cambió su API y necesita actualización.
+        Envía transacción real a Soroban usando stellar-cli.
         """
-        logger.warning(f"Soroban real transaction not implemented (SDK API changed), using stub")
+        import subprocess
+        import json
         
-        # Simular hash real
-        mock_hash = f"real_tx_{farm_id}_{int(time.time())}"
-        return mock_hash
+        # Convertir hedera_txn_id a hex
+        hedera_hex = hedera_txn_id.hex()
+        
+        cmd = [
+            "stellar", "contract", "invoke",
+            "--id", self.config.contract_id,
+            "--source", self.config.oracle_secret,  # secret key o account alias
+            "--network", self.config.network.value,
+            "--json",
+            "--", "update_score",
+            f"--farm_id={farm_id}",
+            f"--score={score}",
+            f"--hedera_txn_id={hedera_hex}",
+            f"--evidence_cid={evidence_cid}",
+        ]
+        
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"CLI error: {result.stderr}")
+                raise RuntimeError(f"Stellar CLI failed: {result.stderr}")
+            
+            # Parsear JSON
+            response = json.loads(result.stdout)
+            
+            # Extraer transaction hash
+            tx_hash = response.get("hash") or response.get("transaction_hash", "")
+            
+            if not tx_hash:
+                # Fallback: intentar extraer de los resultados
+                logger.warning(f"No hash in response, using fallback: {response}")
+                tx_hash = f"tx_{farm_id}_{int(time.time())}"
+            
+            logger.info(f"Soroban tx successful: {tx_hash}")
+            return tx_hash
+            
+        except FileNotFoundError:
+            logger.error("stellar-cli not found in PATH")
+            raise RuntimeError("stellar-cli not installed")
+        except subprocess.TimeoutExpired:
+            logger.error("Stellar CLI timeout")
+            raise RuntimeError("Transaction timeout")
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parse error: {e}, output: {result.stdout}")
+            raise
+        except Exception as e:
+            logger.error(f"Soroban transaction error: {e}")
+            raise
 
     async def get_vitis_score(self, farm_id: str) -> dict[str, Any]:
         """Consulta el VitisScore de un viñedo."""
