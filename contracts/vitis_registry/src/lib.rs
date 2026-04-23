@@ -2,7 +2,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, String, Symbol,
+    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map, String, Symbol, Vec,
 };
 
 /// Storage keys del contrato
@@ -46,7 +46,8 @@ impl VitisRegistry {
         
         env.storage().instance().set(&DataKey::Admin, &admin);
         
-        let empty_map: Map<String, VitisRecord> = Map::new(&env);
+        // Historial de registros por farm_id (lista de auditorías)
+        let empty_map: Map<String, Vec<VitisRecord>> = Map::new(&env);
         env.storage().instance().set(&DataKey::Records, &empty_map);
     }
 
@@ -67,10 +68,13 @@ impl VitisRegistry {
             panic!("Score must be 0-100");
         }
 
-        let mut records: Map<String, VitisRecord> = env.storage()
+        // Obtener historial existente o crear nuevo
+        let mut history: Vec<VitisRecord> = env.storage()
             .instance()
             .get(&DataKey::Records)
-            .unwrap_or_else(|| Map::new(&env));
+            .unwrap_or_else(|| Vec::new(&env))
+            .get(&farm_id)
+            .unwrap_or_else(|| Vec::new(&env));
 
         let record = VitisRecord {
             score,
@@ -80,8 +84,17 @@ impl VitisRegistry {
             auditor: admin.clone(),
         };
 
-        records.set(farm_id.clone(), record);
-        env.storage().instance().set(&DataKey::Records, &records);
+        // Agregar al historial (append)
+        history.push_back(record);
+        
+        // Guardar en mapa de историал
+        let mut all_records: Map<String, Vec<VitisRecord>> = env.storage()
+            .instance()
+            .get(&DataKey::Records)
+            .unwrap_or_else(|| Map::new(&env));
+        
+        all_records.set(farm_id.clone(), history);
+        env.storage().instance().set(&DataKey::Records, &all_records);
 
         // === ARREGLO DEL EVENTO ===
         // Usamos Symbol::new porque el nombre es largo (> 9 chars)
@@ -92,13 +105,50 @@ impl VitisRegistry {
     }
 
     pub fn get_score(env: Env, farm_id: String) -> (u32, u64, BytesN<32>, String, Address) {
-        let records: Map<String, VitisRecord> = env.storage()
+        let all_records: Map<String, Vec<VitisRecord>> = env.storage()
             .instance()
             .get(&DataKey::Records)
             .unwrap_or_else(|| Map::new(&env));
 
-        let record = records.get(farm_id).unwrap_or_else(|| {
+        let history = all_records.get(&farm_id).unwrap_or_else(|| {
             panic!("No record found for farm");
+        });
+
+        // Obtener el último registro (más reciente)
+        let latest = history.get(history.len().saturating_sub(1)).unwrap_or_else(|| {
+            panic!("Empty history");
+        });
+
+        (
+            latest.score,
+            latest.timestamp,
+            latest.hedera_txn_id,
+            latest.evidence_cid,
+            latest.auditor,
+        )
+    }
+
+    /// Obtener historial completo de auditorías
+    pub fn get_history(env: Env, farm_id: String) -> Vec<VitisRecord> {
+        let all_records: Map<String, Vec<VitisRecord>> = env.storage()
+            .instance()
+            .get(&DataKey::Records)
+            .unwrap_or_else(|| Map::new(&env));
+
+        all_records.get(&farm_id).unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Obtener auditoría por índice
+    pub fn get_record_at(env: Env, farm_id: String, index: u32) -> (u32, u64, BytesN<32>, String, Address) {
+        let all_records: Map<String, Vec<VitisRecord>> = env.storage()
+            .instance()
+            .get(&DataKey::Records)
+            .unwrap_or_else(|| Map::new(&env));
+
+        let history = all_records.get(&farm_id).unwrap_or_else(|| Vec::new(&env));
+        
+        let record = history.get(index).unwrap_or_else(|| {
+            panic!("Index out of bounds");
         });
 
         (
@@ -111,12 +161,13 @@ impl VitisRegistry {
     }
 
     pub fn has_record(env: Env, farm_id: String) -> bool {
-        let records: Map<String, VitisRecord> = env.storage()
+        let all_records: Map<String, Vec<VitisRecord>> = env.storage()
             .instance()
             .get(&DataKey::Records)
             .unwrap_or_else(|| Map::new(&env));
 
-        records.contains_key(farm_id)
+        let history = all_records.get(&farm_id).unwrap_or_else(|| Vec::new(&env));
+        history.len() > 0
     }
 
     pub fn set_admin(env: Env, new_admin: Address) {

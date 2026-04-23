@@ -18,7 +18,7 @@ SCORE_WEIGHTS = {
     "humidity": 0.20,
     "temporal_consistency": 0.15,
     "data_quality": 0.15,
-    "ai_reliability": 0.15,
+    "regional_benchmark": 0.15,
 }
 
 
@@ -66,12 +66,27 @@ def _compute_score_breakdown(satellite_data: dict[str, Any]) -> dict[str, Any]:
 
     ai_reliability = 0.90 if status == "success" else 0.60 if status == "partial" else 0.40
 
+    # Benchmark regional: comparar NDVI con promedio de la zona
+    region_avg_ndvi = satellite_data.get("regional_avg_ndvi")
+    if region_avg_ndvi is not None:
+        ndvi_diff = ndvi - region_avg_ndvi
+        if ndvi_diff > 0.1:
+            regional_benchmark = 1.0  # Por encima del promedio
+        elif ndvi_diff > -0.1:
+            regional_benchmark = 0.8  # En línea con el promedio
+        elif ndvi_diff > -0.2:
+            regional_benchmark = 0.5  # Bajo el promedio
+        else:
+            regional_benchmark = 0.2  # Muy bajo
+    else:
+        regional_benchmark = 0.7  # Sin datos regionales, neutral
+
     components = {
         "vegetation": vegetation,
         "humidity": humidity,
         "temporal_consistency": temporal_consistency,
         "data_quality": data_quality,
-        "ai_reliability": ai_reliability,
+        "regional_benchmark": regional_benchmark,
     }
 
     details = {}

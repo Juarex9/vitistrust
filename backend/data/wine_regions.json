@@ -1,0 +1,168 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Valle de Uco",
+        "region_key": "VALLE_DE_UCO",
+        "province": "Mendoza",
+        "avg_ndvi": 0.58,
+        "type": "premium"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-69.5, -34.0],
+          [-69.5, -33.2],
+          [-68.9, -33.2],
+          [-68.9, -34.0],
+          [-69.5, -34.0]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Luján de Cuyo",
+        "region_key": "LUJAN_DE_CUYO",
+        "province": "Mendoza",
+        "avg_ndvi": 0.55,
+        "type": "premium"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-69.1, -33.2],
+          [-69.1, -32.9],
+          [-68.7, -32.9],
+          [-68.7, -33.2],
+          [-69.1, -33.2]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Maipú",
+        "region_key": "MAIPU",
+        "province": "Mendoza",
+        "avg_ndvi": 0.52,
+        "type": "standard"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-68.9, -33.1],
+          [-68.9, -32.85],
+          [-68.65, -32.85],
+          [-68.65, -33.1],
+          [-68.9, -33.1]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Este de Mendoza",
+        "region_key": "EAST_MENDOZA",
+        "province": "Mendoza",
+        "avg_ndvi": 0.48,
+        "type": "standard"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-68.7, -33.0],
+          [-68.7, -32.7],
+          [-68.3, -32.7],
+          [-68.3, -33.0],
+          [-68.7, -33.0]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "San Rafael",
+        "region_key": "SAN_RAFAEL",
+        "province": "Mendoza",
+        "avg_ndvi": 0.50,
+        "type": "standard"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-68.5, -34.8],
+          [-68.5, -34.3],
+          [-67.9, -34.3],
+          [-67.9, -34.8],
+          [-68.5, -34.8]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Cafayate",
+        "region_key": "CAFAYATE",
+        "province": "Salta",
+        "avg_ndvi": 0.45,
+        "type": "premium",
+        "notes": "Valles Calchaquíes - Alta montaña"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-65.9, -26.1],
+          [-65.9, -25.7],
+          [-65.5, -25.7],
+          [-65.5, -26.1],
+          [-65.9, -26.1]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Molinos",
+        "region_key": "MOLINOS",
+        "province": "Salta",
+        "avg_ndvi": 0.43,
+        "type": "premium",
+        "notes": "Valles Calchaquíes - Gualilan"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-66.5, -26.0],
+          [-66.5, -25.6],
+          [-66.1, -25.6],
+          [-66.1, -26.0],
+          [-66.5, -26.0]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Santa María",
+        "region_key": "SANTA_MARIA",
+        "province": "Catamarca",
+        "avg_ndvi": 0.42,
+        "type": "premium",
+        "notes": "Famabalasto"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-66.8, -27.8],
+          [-66.8, -27.5],
+          [-66.4, -27.5],
+          [-66.4, -27.8],
+          [-66.8, -27.8]
+        ]]
+      }
+    }
+  ]
+}

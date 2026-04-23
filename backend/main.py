@@ -978,6 +978,9 @@ async def verify_vineyard(request: AuditRequest) -> AuditResponse:
         region_key=geolocation.get("region_key"),
         region_name=geolocation.get("region"),
     )
+    
+    # Agregar avg_ndvi regional para reasoning agent
+    sat_data["regional_avg_ndvi"] = geolocation.get("avg_ndvi")
 
     # 2. Validación (siempre se devuelve un objeto consistente)
     validation_result: dict[str, Any] = {
