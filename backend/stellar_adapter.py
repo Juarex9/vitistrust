@@ -159,9 +159,9 @@ class SorobanAdapter:
         hedera_hex = hedera_txn_id.hex()
         
         cmd = [
-            "stellar", "contract", "invoke",
+            "wsl", "stellar", "contract", "invoke",
             "--id", self.config.contract_id,
-            "--source", self.config.oracle_secret,  # secret key o account alias
+            "--source", self.config.oracle_secret,
             "--network", self.config.network.value,
             "--json",
             "--", "update_score",
@@ -198,8 +198,8 @@ class SorobanAdapter:
             return tx_hash
             
         except FileNotFoundError:
-            logger.error("stellar-cli not found in PATH")
-            raise RuntimeError("stellar-cli not installed")
+            logger.error("stellar-cli not found (wsl may not be installed)")
+            raise RuntimeError("WSL or stellar-cli not available")
         except subprocess.TimeoutExpired:
             logger.error("Stellar CLI timeout")
             raise RuntimeError("Transaction timeout")
