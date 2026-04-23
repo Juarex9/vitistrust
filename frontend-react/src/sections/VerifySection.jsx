@@ -349,6 +349,27 @@ export default function VerifySection({ t }) {
                           <span className="p-hash">{result.stellar_tx_hash?.substring(0, 16)}...</span>
                         </div>
                       </div>
+                      <button 
+                        type="button" 
+                        className="download-pdf-btn"
+                        onClick={async () => {
+                          try {
+                            const response = await fetch(`${API_BASE}/certificate/${result.farm_id}/pdf`)
+                            if (!response.ok) throw new Error('PDF not available')
+                            const blob = await response.blob()
+                            const url = window.URL.createObjectURL(blob)
+                            const a = document.createElement('a')
+                            a.href = url
+                            a.download = `vitis-certificate-${result.farm_id}.pdf`
+                            a.click()
+                            window.URL.revokeObjectURL(url)
+                          } catch (err) {
+                            console.error('PDF download failed:', err)
+                          }
+                        }}
+                      >
+                        📥 Download Certificate PDF
+                      </button>
                     </div>
                   </>
                 )}
