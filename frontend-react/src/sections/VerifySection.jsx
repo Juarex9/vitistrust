@@ -53,6 +53,8 @@ export default function VerifySection({ t }) {
   const getAlertColor = (severity) => {
     const colors = { low: '#38bdf8', medium: '#f59e0b', high: '#f43f5e' }
     return colors[severity?.toLowerCase()] || '#6b7280'
+  }
+
   const breakdownLabels = {
     vegetation: 'Vegetation',
     humidity: 'Humidity',

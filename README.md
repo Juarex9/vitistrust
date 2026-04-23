@@ -77,8 +77,8 @@ El resultado: un historial auditable que nadie puede falsificar.
   Agent           Topic: 0.0.8386842
       │
       ▼
-5.Backend         Firma transacción en Rootstock
-  (main.py)       certifyAsset() en VitisRegistry
+5.Backend         Firma transacción en Stellar Soroban
+   (main.py)       Actualiza estado del contrato
       │
       ▼
 6.Usuario         Recibe certificación completa

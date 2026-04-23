@@ -23,7 +23,7 @@ Frontend (Vercel)          Backend (Render)
    - Sentinel Hub (satellite imagery)
    - Groq (AI analysis)
    - Hedera (notarization)
-   - Rootstock RPC (smart contracts)
+   - Stellar Soroban RPC (smart contracts)
 
 ---
 
@@ -58,23 +58,25 @@ Frontend (Vercel)          Backend (Render)
 Add these in Render dashboard → Environment:
 
 ```bash
-# Rootstock
-RSK_RPC_URL=https://public-node.testnet.rsk.co
-RSK_ORACLE_ADDRESS=0x...          # Your oracle address
-RSK_PRIVATE_KEY=0x...             # Your private key
-RSK_CONTRACT_ADDRESS=0x...        # Deployed contract address
+# ===== STELLAR SOROBAN (Asset Layer) =====
+STELLAR_NETWORK=testnet
+STELLAR_RPC_URL=https://soroban-testnet.stellar.org:443
+STELLAR_ORACLE_SECRET=your_oracle_secret
+SOROBAN_CONTRACT_ID=CA...        # Deployed contract address
+STELLAR_TIMEOUT_S=60
 
-# Hedera
+# ===== HEDERA (Trust Layer) =====
 HEDERA_ACCOUNT_ID=0.0.xxxxxx
 HEDERA_DER_PRIVATE_KEY=3020...
 HEDERA_TOPIC_ID=0.0.xxxxxx
 
-# Sentinel Hub
+# ===== SATELLITE (Sentinel Hub) =====
 SENTINEL_CLIENT_ID=...
 SENTINEL_CLIENT_SECRET=...
 
-# AI
+# ===== AI (Groq) =====
 AI_API_KEY=...
+AI_MODEL=llama-3.3-70b-versatile
 ```
 
 ### Health Check
@@ -168,7 +170,7 @@ Visit: `https://your-vercel-project.vercel.app`
    - NDVI image
    - VitisScore
    - Hedera topic ID
-   - RSK transaction hash
+   - Stellar transaction hash
 
 ---
 
@@ -223,7 +225,7 @@ uvicorn backend.main:app --reload
 ## Security Notes
 
 1. **Never commit `.env` files** - Use Render/Vercel environment variables
-2. **Rotate keys regularly** - Especially RSK_PRIVATE_KEY
+2. **Rotate keys regularly** - Especially STELLAR_ORACLE_SECRET
 3. **Use testnet first** - Don't use mainnet private keys until production-ready
 4. **Rate limiting** - Consider adding rate limiting for production
 

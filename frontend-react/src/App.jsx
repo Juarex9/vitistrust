@@ -56,10 +56,10 @@ function App() {
   useEffect(() => {
     const handleScroll = () => {
       const sections = [
-        { id: 'verify', offset: 150 },
-        { id: 'about', offset: 150 },
+        { id: 'home', offset: 300 },
         { id: 'how-it-works', offset: 150 },
-        { id: 'home', offset: 200 }
+        { id: 'verify', offset: 150 },
+        { id: 'about', offset: 150 }
       ]
       
       for (const section of sections) {

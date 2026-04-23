@@ -4,7 +4,7 @@
 
 VitisTrust is an Oracle Verification system for vineyard NFT verification. It uses
 satellite data and AI to assess vineyard health and records certifications on Hedera
-and Rootstock networks.
+and Stellar Soroban networks.
 
 ## Project Structure
 
@@ -18,9 +18,9 @@ vitistrust/
 │   ├── main.py               # FastAPI application
 │   └── constants.py          # Contract ABIs
 ├── scripts/
-│   └── deploy_rsk.py         # Deploy contract to RSK
+│   └── deploy_stellar.py     # Deploy contract to Stellar Soroban
 ├── contracts/
-│   └── VitisRegistry.sol     # Solidity smart contract
+│   └── vitis_contract       # Soroban smart contract (Rust)
 ├── requirements.txt          # Python dependencies
 └── .env                      # Environment variables
 ```
@@ -80,23 +80,20 @@ black --check .
 isort --check-only .
 ```
 
-### Smart Contract (Foundry)
+### Smart Contract (Stellar Soroban)
 
 ```bash
-# Install dependencies
-forge install
+# Install stellar CLI (if needed)
+cargo install stellar-cli
 
-# Compile contracts
-forge build
-
-# Run contract tests
-forge test
+# Build contract
+stellar contract build
 
 # Deploy to testnet
-forge create --rpc-url $RSK_RPC_URL --private-key $RSK_PRIVATE_KEY --verify contracts/VitisRegistry.sol:VitisRegistry
+stellar contract deploy --source your_soracle_account --network testnet
 
 # Deploy to mainnet
-forge create --rpc-url $RSK_MAINNET_RPC --private-key $RSK_PRIVATE_KEY contracts/VitisRegistry.sol:VitisRegistry
+stellar contract deploy --source your_soracle_account --network mainnet
 ```
 
 ---
@@ -264,7 +261,7 @@ require(msg.sender == oracle, "Only VitisTrust Oracle can certify");
 
 - Never commit secrets to version control
 - Use `.env` for local development only
-- Prefix test variables with appropriate network (RSK_, HEDERA_)
+- Prefix test variables with appropriate network (STELLAR_, HEDERA_)
 - Validate required env vars at startup
 
 ```python
@@ -272,10 +269,10 @@ import os
 from functools import lru_cache
 
 @lru_cache
-def get_rpc_url() -> str:
-    url = os.getenv("RSK_RPC_URL")
+def get_stellar_rpc_url() -> str:
+    url = os.getenv("STELLAR_RPC_URL")
     if not url:
-        raise ValueError("RSK_RPC_URL not configured")
+        raise ValueError("STELLAR_RPC_URL not configured")
     return url
 ```
 
@@ -311,19 +308,22 @@ async def run_audit(contract_address: str, token_id: int) -> dict:
 Create a `.env` file with required variables:
 
 ```
-# Rootstock
-RSK_RPC_URL=https://public-node.testnet.rsk.co
-RSK_PRIVATE_KEY=your_private_key
-RSK_ORACLE_ADDRESS=your_public_address
-RSK_CONTRACT_ADDRESS=0x... (after deploy)
+# ===== STELLAR SOROBAN (Asset Layer) =====
+STELLAR_NETWORK=testnet
+STELLAR_RPC_URL=https://soroban-testnet.stellar.org:443
+STELLAR_ORACLE_SECRET=your_oracle_secret
+SOROBAN_CONTRACT_ID=CA... (after deploy)
 
-# Hedera
+# ===== HEDERA (Trust Layer) =====
 HEDERA_ACCOUNT_ID=0.0.xxxxxx
 HEDERA_PRIVATE_KEY=your_hedera_key
 HEDERA_TOPIC_ID=0.0.xxxxxx
 
-# APIs
-PLANET_API_KEY=your_planet_key
+# ===== SATÉLITE =====
+SENTINEL_CLIENT_ID=your_client_id
+SENTINEL_CLIENT_SECRET=your_client_secret
+
+# ===== IA (GROQ) =====
 AI_API_KEY=your_groq_key
 AI_MODEL=deepseek-r1-distill-llama-70b
 ```
@@ -331,12 +331,11 @@ AI_MODEL=deepseek-r1-distill-llama-70b
 ### Deploy Contract
 
 ```bash
-# Using Python script (requires solcx)
-pip install solc
-python scripts/deploy_rsk.py
+# Deploy Soroban contract using stellar-cli
+stellar contract deploy --source your_soracle_account --network testnet
 
-# Or using Foundry
-forge create --rpc-url $RSK_RPC_URL --private-key $RSK_PRIVATE_KEY contracts/VitisRegistry.sol:VitisRegistry
+# Or using the Python deployment script
+python scripts/deploy_stellar.py
 ```
 
 ---
@@ -345,7 +344,7 @@ forge create --rpc-url $RSK_RPC_URL --private-key $RSK_PRIVATE_KEY contracts/Vit
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/health` | Health check (RSK & Hedera connections) |
+| GET | `/health` | Health check (Stellar & Hedera connections) |
 | GET | `/verify-vineyard?lat=X&lon=Y&asset_address=Z&token_id=N` | Run full audit |
 | GET | `/certificate/{asset_address}/{token_id}` | Query existing certificate |
 
@@ -362,4 +361,4 @@ The system consists of four main components:
 3. **Reasoning Agent** (`agents/reasoning_agent.py`): Uses AI (DeepSeek-R1 via Groq)
    to analyze data and generate VitisScore
 4. **Backend API** (`backend/main.py`): FastAPI app orchestrating the workflow and
-   recording proofs on Hedera (HCS) and Rootstock (VitisRegistry.sol)
+   recording proofs on Hedera (HCS) and Stellar Soroban

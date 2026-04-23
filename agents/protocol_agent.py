@@ -181,7 +181,6 @@ class HederaProtocol:
                     "status": "SUCCESS (MOCK)",
                     "transaction_id": mock_txn_id,
                 }
-                return SUCCESS_MOCK
 
             from hiero_sdk_python import TopicMessageSubmitTransaction, TopicId
             operator_key = self._get_operator_key()
@@ -220,7 +219,6 @@ class HederaProtocol:
                     "status": "SUCCESS (MOCK)",
                     "transaction_id": mock_txn_id,
                 }
-                return SUCCESS_MOCK
             logger.error(f"Failed to notarize: {e}")
             return {
                 "status": f"ERROR: {str(e)}",

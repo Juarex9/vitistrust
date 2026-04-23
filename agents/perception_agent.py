@@ -1,6 +1,6 @@
 # agents/perception_agent.py
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 import time
 
@@ -15,6 +15,7 @@ load_dotenv()
 logger = logging.getLogger("vitistrust.perception")
 
 SATELLITE_STATS_URL = "https://services.sentinel-hub.com/api/v1/statistics"
+SATELLITE_PROCESS_URL = "https://services.sentinel-hub.com/api/v1/process"
 
 _token_cache = {"token": None, "expires": 0}
 
@@ -78,19 +79,34 @@ def get_real_ndvi(lat: float, lon: float, date_from: str | None = None, date_to:
 
 
 def get_real_indices(lat: float, lon: float) -> dict[str, Any]:
-    """Consulta NDVI + NDMI reales desde Sentinel Hub Statistics API."""
+    """Consulta NDVI + NDMI reales desde Sentinel Hub Process API."""
     token = _get_sentinel_token()
     if not token:
         logger.warning("No Sentinel token, using fallback NDVI/NDMI")
         return _fallback_indices(lat, lon)
 
-    offset = 0.0005
+    offset = 0.005
     bbox = [lon - offset, lat - offset, lon + offset, lat + offset]
     now_utc = datetime.now(timezone.utc)
     date_to = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-    date_from = (now_utc.replace(hour=0, minute=0, second=0, microsecond=0)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+    date_from = (now_utc - timedelta(days=180)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    evalscript = """
+    //VERSION=3
+    function setup() {
+        return {
+            input: ["B04", "B08", "B11", "dataMask"],
+            output: { id: "default", bands: 3 }
+        };
+    }
+    function evaluatePixel(sample) {
+        if (sample.dataMask === 0) return [0, 0, 0];
+        let ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04);
+        let ndmi = (sample.B08 - sample.B11) / (sample.B08 + sample.B11);
+        return [ndvi, ndmi, sample.dataMask];
+    }
+    """
+
     payload = {
         "input": {
             "bounds": {
@@ -107,43 +123,13 @@ def get_real_indices(lat: float, lon: float) -> dict[str, Any]:
                 }
             ],
         },
-        "aggregation": {
-            "timeRange": {"from": date_from, "to": date_to},
-            "aggregationInterval": {"of": "P1D"},
-            "resx": 10,
-            "resy": 10,
-            "evalscript": """
-                //VERSION=3
-                function setup() {
-                  return {
-                    input: [{ bands: ["B04", "B08", "B11", "dataMask"] }],
-                    output: [
-                      { id: "ndvi", bands: 1 },
-                      { id: "ndmi", bands: 1 },
-                      { id: "dataMask", bands: 1 }
-                    ]
-                  };
-                }
-                function evaluatePixel(sample) {
-                  const ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04);
-                  const ndmi = (sample.B08 - sample.B11) / (sample.B08 + sample.B11);
-                  return {
-                    ndvi: [ndvi],
-                    ndmi: [ndmi],
-                    dataMask: [sample.dataMask]
-                  };
-                }
-            """,
-        },
-        "calculations": {
-            "ndvi": {"statistics": {"default": {"percentiles": {"k": [5, 50, 95]}}}},
-            "ndmi": {"statistics": {"default": {"percentiles": {"k": [5, 50, 95]}}}},
-        },
+        "output": {"responses": [{"identifier": "default", "format": {"type": "image/png"}}]},
+        "evalscript": evalscript,
     }
 
     try:
         response = requests.post(
-            SATELLITE_STATS_URL,
+            SATELLITE_PROCESS_URL,
             json=payload,
             headers={"Authorization": f"Bearer {token}"},
             timeout=60,
@@ -152,32 +138,44 @@ def get_real_indices(lat: float, lon: float) -> dict[str, Any]:
             logger.warning("Sentinel token expired, using fallback")
             _token_cache["token"] = None
             return _fallback_indices(lat, lon)
-        response.raise_for_status()
-        data = response.json()
-        entries = data.get("data", [])
-        if not entries:
-            logger.warning("No Sentinel statistics data, using fallback")
+        if response.status_code != 200 or len(response.content) < 1000:
+            logger.warning(f"Sentinel Process API error: {response.status_code}, using fallback")
             return _fallback_indices(lat, lon)
 
-        outputs = entries[-1].get("outputs", {})
-        ndvi = _extract_mean(outputs, "ndvi")
-        ndmi = _extract_mean(outputs, "ndmi")
-        if ndvi is None or ndmi is None:
-            logger.warning("Unable to parse NDVI/NDMI from Sentinel response")
+        img_data = response.content
+        ndvi_vals = []
+        ndmi_vals = []
+
+        for y in range(0, min(512, len(img_data) // 4), 10):
+            for x in range(0, min(512, len(img_data) // 4), 10):
+                idx = (y * 512 + x) * 4
+                if idx + 2 < len(img_data):
+                    r, g, b = img_data[idx], img_data[idx + 1], img_data[idx + 2]
+                    ndvi_sample = (r - b) / (r + b) if (r + b) > 0 else 0
+                    ndmi_sample = (r - g) / (r + g) if (r + g) > 0 else 0
+                    if abs(ndvi_sample) < 1.0 and abs(ndmi_sample) < 1.0:
+                        ndvi_vals.append(ndvi_sample)
+                        ndmi_vals.append(ndmi_sample)
+
+        if not ndvi_vals:
+            logger.warning("No valid pixels from Process API, using fallback")
             return _fallback_indices(lat, lon)
+
+        ndvi = sum(ndvi_vals) / len(ndvi_vals)
+        ndmi = sum(ndmi_vals) / len(ndmi_vals)
 
         return {
             "status": "success",
             "ndvi": round(ndvi, 3),
             "ndmi": round(ndmi, 3),
             "coordinates": {"lat": lat, "lon": lon},
-            "source": "Sentinel-2 L2A via Sentinel Hub Statistics API",
+            "source": "Sentinel-2 L2A via Sentinel Hub Process API",
         }
     except requests.RequestException as e:
         logger.error(f"Sentinel Hub API error: {e}")
         return _fallback_indices(lat, lon)
-    except (KeyError, IndexError, TypeError, ValueError) as e:
-        logger.error(f"Failed to parse Sentinel statistics response: {e}")
+    except Exception as e:
+        logger.error(f"Failed to parse Sentinel response: {e}")
         return _fallback_indices(lat, lon)
 
 

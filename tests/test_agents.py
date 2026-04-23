@@ -241,7 +241,7 @@ class TestBackend:
                 assert "status" in data
     
     def test_health_endpoint_disconnected(self):
-        """Test health endpoint when RSK is disconnected."""
+        """Test health endpoint when Stellar is disconnected."""
         from fastapi.testclient import TestClient
         from unittest.mock import patch, MagicMock
         
@@ -257,7 +257,7 @@ class TestBackend:
                     
                     assert response.status_code == 200
                     data = response.json()
-                    assert data["rsk"] == "disconnected"
+                    assert data["stellar"] == "disconnected"
     
     def test_verify_endpoint_missing_params(self):
         """Test verification with missing parameters."""
