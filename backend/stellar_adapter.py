@@ -133,28 +133,14 @@ Returns:
         else:
             hedera_hex = str(hedera_txn_id)
         
-        # Usar ruta directa a stellar en WSL
-        STELLAR_PATH = "/usr/local/bin/stellar"
-        
-        cmd = [
-            "wsl", "bash", "-lc",
-            f"{STELLAR_PATH} contract invoke "
-            f"--id {self.config.contract_id} "
-            f"--source oracle_account "
-            f"--network {self.config.network.value} "
-            f"--json -- "
-            f"update_score "
-            f"--farm_id {farm_id} "
-            f"--score {score} "
-            f"--hedera_txn_id {hedera_hex} "
-            f"--evidence_cid {evidence_cid}",
-        ]
+        # Usar comando directo desde cmd.exe con wsl
+        cmd = f'wsl -e bash -c "/usr/local/bin/stellar contract invoke --id {self.config.contract_id} --source oracle_account --network {self.config.network.value} --json -- update_score --farm_id {farm_id} --score {score} --hedera_txn_id {hedera_hex} --evidence_cid {evidence_cid}"'
         
         logger.info(f"Executing: wsl bash -lc /usr/local/bin/stellar contract invoke...")
         
         try:
             result = subprocess.run(
-                " ".join(cmd),  # Join command as string for shell
+                cmd,
                 shell=True,
                 capture_output=True,
                 text=True,
