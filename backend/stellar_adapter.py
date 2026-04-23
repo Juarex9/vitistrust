@@ -119,49 +119,16 @@ class SorobanAdapter:
                 logger.info(f"Idempotency hit, returning cached: {cached_hash}")
                 return cached_hash
         
-        self._metrics.total_submissions += 1
+self._metrics.total_submissions += 1
         
-        # Usar SDK real si está disponible
-        if self._stellar_available and self.config.oracle_secret:
-            tx_hash = await self._submit_real_transaction(
-                farm_id=farm_id,
-                score=score,
-                hedera_txn_id=hedera_txn_id,
-                evidence_cid=evidence_cid,
-            )
-            # Cachear para idempotency
-            ttl = time.time() + self._idempotency_window_seconds
-            self._idempotency_cache[idempotency_key] = (tx_hash, ttl)
-            logger.info(f"VitisScore updated (real). TX: {tx_hash}")
-            return tx_hash
+        logger.info(f"Executing stellar-cli command for {farm_id}")
         
-        # Modo stub
-        mock_hash = f"mock_tx_{farm_id}_{int(time.time())}"
-        ttl = time.time() + self._idempotency_window_seconds
-        self._idempotency_cache[idempotency_key] = (mock_hash, ttl)
-        logger.info(f"VitisScore updated (stub mode). TX: {mock_hash}")
-        return mock_hash
-
-    async def _submit_real_transaction(
-        self,
-        farm_id: str,
-        score: int,
-        hedera_txn_id: bytes,
-        evidence_cid: str,
-    ) -> str:
-        """
-        Envía transacción real a Soroban usando stellar-cli.
-        """
-        import subprocess
-        import json
+        # Usar ruta directa a stellar en WSL
+        STELLAR_PATH = "/usr/local/bin/stellar"
         
-        # Convertir hedera_txn_id a hex
-        hedera_hex = hedera_txn_id.hex()
-        
-        # Usar bash -c para ejecutar en WSL con PATH correcto
         cmd = [
             "wsl", "bash", "-lc",
-            f"stellar contract invoke "
+            f"{STELLAR_PATH} contract invoke "
             f"--id {self.config.contract_id} "
             f"--source oracle_account "
             f"--network {self.config.network.value} "
@@ -173,7 +140,7 @@ class SorobanAdapter:
             f"--evidence_cid {evidence_cid}",
         ]
         
-        logger.info(f"Executing: wsl bash -lc stellar contract invoke...")
+        logger.info(f"Executing: wsl bash -lc /usr/local/bin/stellar contract invoke...")
         
         try:
             result = subprocess.run(
