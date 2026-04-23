@@ -53,11 +53,7 @@ export default function HomeSection({ t, scrollTo }) {
         <div className="stat-hero"><span className="stat-hero-value">0-100</span><span className="stat-hero-label">VitisScore</span></div>
         <div className="stat-hero"><span className="stat-hero-value">24</span><span className="stat-hero-label">Meses Historia</span></div>
       </div>
-
-      <div className="cta-section">
-        <h2>¿Listo para verificar tu viñedo?</h2>
-        <button onClick={() => scrollTo('verify')} className="cta-btn primary large">Comenzar Verificación</button>
-      </div>
+s
     </section>
   )
 }

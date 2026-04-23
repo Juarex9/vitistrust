@@ -40,7 +40,7 @@ export default function AboutSection({ t, scrollTo }) {
           <span className="tech-tag">Sentinel-2</span>
           <span className="tech-tag">DeepSeek-R1</span>
           <span className="tech-tag">Hedera HCS</span>
-          <span className="tech-tag">Rootstock</span>
+          <span className="tech-tag">Stellar Soroban</span>
           <span className="tech-tag">FastAPI</span>
           <span className="tech-tag">React</span>
         </div>

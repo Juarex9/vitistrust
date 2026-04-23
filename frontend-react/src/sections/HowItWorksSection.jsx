@@ -34,14 +34,10 @@ export default function HowItWorksSection({ t, scrollTo }) {
         </div>
         <div className="detail-card">
           <h3>⛓️ Doble Blockchain</h3>
-          <p>Hedera records results immutably. Rootstock smart contracts certify the NFT on Bitcoin's blockchain.</p>
+          <p>Hedera HCS records results immutably. Stellar Soroban stores VitisScore on-chain with low fees.</p>
         </div>
       </div>
 
-      <div className="cta-section">
-        <h2>¿Querés ver el proceso en acción?</h2>
-        <button onClick={() => scrollTo('verify')} className="cta-btn primary large">Verificar Viñedo</button>
-      </div>
     </section>
   )
 }

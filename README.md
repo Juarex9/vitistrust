@@ -3,8 +3,8 @@
 **Certificador descentralizado de viñedos tokenizados**
 
 VitisTrust es un oráculo que audita la salud de viñedos usando datos satelitales e IA,
-registrando las certificaciones en Hedera (HCS) y Rootstock (RSK) para garantizar
-transparencia e inmutabilidad en inversiones agrícolas tokenizadas.
+registrando las certificaciones en Hedera (HCS - Trust Layer) y Stellar Soroban (Asset Layer)
+para garantizar transparencia e inmutabilidad en inversiones agrícolas tokenizadas.
 
 ---
 
@@ -16,9 +16,8 @@ de activos agrícolas (RWA). Cuando un viñedo es tokenizado como NFT:
 1. **El inversor necesita saber** si el viñedo está realmente sano
 2. **El oráculo consulta** imágenes satelitales (NDVI)
 3. **La IA analiza** los datos y genera un VitisScore (0-100) e informe detallado
-4. **SSE Streaming**: El frontend muestra el progreso en tiempo real (Hacker Terminal)
-5. **Hedera notariza** el resultado de forma inmutable
-6. **Rootstock certifica** el NFT en un smart contract
+4. **Hedera notariza** el resultado de forma inmutable (Trust Layer)
+5. **Stellar Soroban** almacena el VitisScore on-chain (Asset Layer)
 
 El resultado: un historial auditable que nadie puede falsificar.
 
@@ -28,8 +27,8 @@ El resultado: un historial auditable que nadie puede falsificar.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        VITISTRUST ORACLE                         │
-├─────────────────────────────────────────────────────────────────┤
+│                    VITISTRUST ORACLE                    │
+├──────────────────────────────���──────────────────────────────────┤
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐     │
 │  │   USER       │───▶│   FASTAPI    │◀───│   VERIFY     │     │
 │  │  (Frontend)  │    │   BACKEND    │    │  REQUEST    │     │
@@ -47,13 +46,13 @@ El resultado: un historial auditable que nadie puede falsificar.
 │  │  SATELLITE   │    │   LLM (AI)   │    │   HEDERA     │    │
 │  │  (Sentinel)  │    │   (Groq)     │    │   (HCS)      │    │
 │  └──────────────┘    └──────────────┘    └──────────────┘    │
-│         │                                       │              │
+│         │                                            │              │
 │         │                    ┌─────────────────┘              │
 │         │                    ▼                                   │
-│         │            ┌──────────────┐                            │
-│         └───────────▶│  ROOTSTOCK   │◀── Smart Contract            │
-│                      │    (RSK)     │    VitisRegistry            │
-│                      └──────────────┘                              │
+│         │            ┌──────────────┐                        │
+│         └───────────▶│  STELLAR     │◀── Soroban Contract      │
+│                      │  SOROBAN     │    VitisRegistry          │
+│                      └──────────────┘                        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -78,8 +77,8 @@ El resultado: un historial auditable que nadie puede falsificar.
   Agent           Topic: 0.0.8386842
       │
       ▼
-5.Backend         Firma transacción en Rootstock
-  (main.py)       certifyAsset() en VitisRegistry
+5.Backend         Firma transacción en Stellar Soroban
+   (main.py)       Actualiza estado del contrato
       │
       ▼
 6.Usuario         Recibe certificación completa
@@ -95,17 +94,18 @@ vitistrust/
 │   ├── perception_agent.py    # Satélite: Sentinel Hub → NDVI
 │   ├── reasoning_agent.py      # IA: Groq → VitisScore + Investment Analysis
 │   ├── protocol_agent.py       # Hedera: HCS → Notarización
-│   └── validation_agent.py     # Validación: geolocalización, vegetation, ERC-721
+│   └── validation_agent.py     # Validación: geolocalización, vegetation
 ├── backend/
 │   ├── main.py                # FastAPI: Endpoints del oráculo
-│   └── constants.py           # ABI del contrato VitisRegistry
+│   ├── stellar_adapter.py     # Stellar Soroban adapter
+│   └── constants.py           # ABI del contrato
 ├── frontend-react/             # React frontend
 │   └── src/App.jsx            # Interfaz de usuario
 ├── contracts/
-│   └── VitisRegistry.sol       # Smart Contract en RSK
+│   └── vitis_registry/         # Smart Contract en Soroban (Rust)
 ├── scripts/
-│   └── deploy_rsk.py          # Deploy del contrato
-├── .env                       # Configuración (NOコミット)
+│   └── deploy_soroban.py      # Deploy del contrato Soroban
+├── .env                       # Configuración (NO commit)
 ├── requirements.txt            # Dependencias Python
 └── README.md                   # Este archivo
 ```
@@ -118,36 +118,94 @@ vitistrust/
 
 | Method | Endpoint | Descripción |
 |--------|----------|-------------|
-| GET | `/health` | Verifica conexiones a RSK y Hedera |
-| GET | `/verify-vineyard?lat=X&lon=Y&asset_address=Z&token_id=N` | Ejecuta auditoría completa |
-| GET | `/certificate/{asset_address}/{token_id}` | Consulta certificación existente |
+| GET | `/health` | Verifica conexiones a Hedera y Stellar |
+| POST | `/verify-vineyard` | Ejecuta auditoría completa |
+| GET | `/verify-vineyard` | Ejecuta auditoría (GET) |
+| GET | `/certificate/{farm_id}` | Consulta certificación existente |
 
 ### Ejemplo de Uso
 
 ```bash
 # Auditar un viñedo
-curl "http://localhost:8000/verify-vineyard?lat=-33.1254&lon=-68.8942&asset_address=0xTU_ADDRESS&token_id=1"
+curl "http://localhost:8000/verify-vineyard?lat=-33.1254&lon=-68.8942&farm_id=mendoza_1"
 
 # Respuesta:
 {
   "vitis_score": 75,
   "risk": "low",
   "justification": "El NDVI de 0.75 indica excelente salud vegetativa...",
+  "ndvi": 0.7512,
+  "satellite_img": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
   "hedera_notarization": "SUCCESS",
-  "rsk_tx_hash": "0xabc123...",
+  "stellar_tx_hash": "3f08e6f94f7f0f4f3fa7491d58dd4d0f1d6b9ca2d31e2e8c4e...",
+  "hedera_txn_id": "0.0.1234567@1713659342.000001",
   "status": "ASSET_CERTIFIED",
   "investment_analysis": {
     "recommendation": "BUY",
     "risk_score": 20,
     "yield_forecast": "10-12 tons/ha"
-  }
+  },
+  "validation": {
+    "all_valid": true,
+    "can_verify": true,
+    "validations": {
+      "geolocation": {
+        "valid": true,
+        "region": "Valle de Uco",
+        "region_key": "VALLE_DE_UCO",
+        "message": "Coordinates within Valle de Uco"
+      },
+      "vegetation": {
+        "valid": true,
+        "health": "high",
+        "message": "Vegetation detected (NDVI: 0.7512, health: high)"
+      },
+      "contract": null,
+      "token": null,
+      "certificate": null
+    }
+  },
+  "lat": -33.1254,
+  "lon": -68.8942,
+  "source": "sentinel_hub"
 }
 
 # Consultar certificación previa
-curl "http://localhost:8000/certificate/0xTU_ADDRESS/1"
+curl "http://localhost:8000/certificate/mendoza_1"
 
 # Verificar salud del oráculo
 curl "http://localhost:8000/health"
+```
+
+### Schema final de `/verify-vineyard`
+
+```json
+{
+  "vitis_score": "int",
+  "risk": "str",
+  "justification": "str",
+  "ndvi": "float",
+  "satellite_img": "str (base64 data URL)",
+  "hedera_notarization": "str",
+  "stellar_tx_hash": "str",
+  "hedera_txn_id": "str",
+  "status": "str",
+  "investment_analysis": "dict[str, Any] | null",
+  "validation": {
+    "all_valid": "bool",
+    "can_verify": "bool",
+    "validations": {
+      "geolocation": "dict[str, Any]",
+      "vegetation": "dict[str, Any]",
+      "contract": "dict[str, Any] | null",
+      "token": "dict[str, Any] | null",
+      "certificate": "dict[str, Any] | null"
+    }
+  },
+  "lat": "float | null",
+  "lon": "float | null",
+  "source": "str | null"
+}
 ```
 
 ---
@@ -157,16 +215,16 @@ curl "http://localhost:8000/health"
 ### Variables de Entorno (.env)
 
 ```bash
-# ===== ROOTSTOCK (RSK) =====
-RSK_RPC_URL=https://public-node.testnet.rsk.co
-RSK_PRIVATE_KEY=tu_private_key
-RSK_ORACLE_ADDRESS=tu_direccion
-RSK_CONTRACT_ADDRESS=0x1418344A54a065987B991574632CBd36114e308d
-
-# ===== HEDERA / HIERO =====
+# ===== HEDERA (Trust Layer) =====
 HEDERA_ACCOUNT_ID=0.0.xxxxxx
 HEDERA_DER_PRIVATE_KEY=3030020100300706052b8104000a04220420...
 HEDERA_TOPIC_ID=0.0.xxxxxx
+
+# ===== STELLAR SOROBAN (Asset Layer) =====
+STELLAR_NETWORK=testnet
+STELLAR_RPC_URL=https://soroban-testnet.stellar.org:443
+STELLAR_ORACLE_SECRET=tu_stellar_secret
+SOROBAN_CONTRACT_ID=CA...
 
 # ===== SATÉLITE =====
 SENTINEL_CLIENT_ID=tu_client_id
@@ -218,42 +276,37 @@ npm run dev
 |------|------------|-----------|
 | API | FastAPI + Uvicorn | Servidor REST |
 | Satélite | Sentinel Hub (ESA) | Imágenes multiespectrales (NDVI) |
-| IA | Groq (Llama 3.3) | Análisis de datos + Investment Analysis |
-| Blockchain 1 | Hedera (HCS) | Notarización inmutable |
-| Blockchain 2 | Rootstock (RSK) | Smart Contracts (EVM) |
+| IA | Groq (DeepSeek-R1) | Análisis de datos + Investment Analysis |
+| Blockchain 1 | Hedera (HCS) | Notarización inmutable (Trust Layer) |
+| Blockchain 2 | Stellar Soroban | Smart Contracts (Asset Layer) |
 | Frontend | React + Vite | Interfaz de usuario |
 
 ---
 
 ## 📋 Smart Contract
 
-### VitisRegistry.sol (Rootstock)
+### VitisRegistry (Soroban/Rust)
 
-```solidity
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+```rust
+// contracts/vitis_registry/src/lib.rs
+// Almacena VitisScores en Stellar Soroban
 
-contract VitisRegistry {
-    struct Certificate {
-        uint256 score;
-        uint256 timestamp;
-        string hederaTopic;
-    }
-    
-    mapping(address => mapping(uint256 => Certificate)) public certificates;
-    
-    function certifyAsset(
-        address assetContract,
-        uint256 tokenId,
-        uint256 score,
-        string memory topicId
-    ) public {
-        certificates[assetContract][tokenId] = Certificate({
-            score: score,
-            timestamp: block.timestamp,
-            hederaTopic: topicId
-        });
-    }
+struct VitisRecord {
+    score: u32,              // 0-100
+    timestamp: u64,         // Unix
+    hedera_txn_id: BytesN<32>,
+    auditor: Address,
+}
+
+pub fn update_score(
+    env: Env,
+    farm_id: Symbol,       // "mendoza_1"
+    score: u32,            // 85
+    hedera_txn_id: BytesN<32>,
+) {
+    // Solo el oráculo puede actualizar
+    admin.require_auth();
+    records.set(farm_id, record);
 }
 ```
 
@@ -264,8 +317,8 @@ contract VitisRegistry {
 ### Hedera (HashScan)
 - Topic: https://testnet.hashscan.io/topic/0.0.8386842
 
-### Rootstock (RSK Explorer)
-- Contrato: https://explorer.testnet.rsk.co/address/0x1418344A54a065987B991574632CBd36114e308d
+### Stellar (StellarBeat)
+- Contract: https://stellarbeat.io/contract/{SOROBAN_CONTRACT_ID}
 
 ---
 
@@ -277,10 +330,11 @@ En la tokenización de viñedos, el inversor no puede verificar si el activo sub
 realmente existe y está sano. VitisTrust resolve este problema:
 
 1. **Satélite + IA**: Datos objetivos, no manipulables
-2. **Doble blockchain**: Hedera para consenso + Rootstock para seguridad Bitcoin
+2. **Doble blockchain**: Hedera HCS para consenso + Stellar Soroban para storage on-chain
 3. **Inmutable**: Cada auditoría queda registrada para siempre
 4. **Descentralizado**: Nadie puede falsificar un certificado
 5. **Análisis de Inversión**: BUY/HOLD/SELL para inversores
+6. **Costos ultra-bajos**: Stellar Soroban vs EVM
 
 > "VitisTrust trae transparencia verificable al mercado de vinos tokenizados."
 
@@ -290,11 +344,11 @@ realmente existe y está sano. VitisTrust resolve este problema:
 
 | Componente | Estado |
 |------------|--------|
-| Smart Contract | ✅ Desplegado en RSK Testnet |
+| Smart Contract | ⚠️ Código listo (compilar + deploy) |
 | Backend API | ✅ Funcionando |
-| Frontend | ✅ React sin wallet |
+| Frontend | ✅ React (actualizado) |
 | Hedera HCS | ✅ Notarización activa |
-| Análisis IA | ✅ Investment Analysis |
+| Stellar Adapter | ✅ Código listo |
 
 ---
 

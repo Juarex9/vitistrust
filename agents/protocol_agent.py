@@ -7,6 +7,8 @@ para crear un log inmutable de las auditorías de viñedos.
 """
 
 import logging
+import random
+import time
 from typing import Any, Optional
 
 from dotenv import load_dotenv
@@ -18,6 +20,7 @@ logger = logging.getLogger("vitistrust.protocol")
 
 # DER Private Key del portal (si está configurada en .env)
 DER_PRIVATE_KEY = os.getenv("HEDERA_DER_PRIVATE_KEY", "")
+SUCCESS_MOCK = "SUCCESS_MOCK"
 
 
 def _extract_raw_key_from_der(der_hex: str) -> bytes:
@@ -69,13 +72,12 @@ def _get_hedera_client():
 class HederaProtocol:
     """Protocolo de notarización en Hedera Consensus Service."""
     
-    def __init__(self) -> None:
-        self.client = _get_hedera_client()
-        if self.client is None:
+    def __init__(self, is_mock: bool = False) -> None:
+        self.is_mock = is_mock
+        self.client = None if self.is_mock else _get_hedera_client()
+        if self.client is None and not self.is_mock:
             logger.warning("Hedera SDK not found or client failed. Using MOCK mode for demo.")
             self.is_mock = True
-        else:
-            self.is_mock = False
         
         self.account_id = os.getenv("HEDERA_ACCOUNT_ID", "0.0.0")
         self.topic_id = os.getenv("HEDERA_TOPIC_ID", "0.0.0")
@@ -164,7 +166,7 @@ class HederaProtocol:
             traceback.print_exc()
             return None
     
-    def notarize_vitis_report(self, topic_id: str, report_data: dict[str, Any]) -> str:
+    def notarize_vitis_report(self, topic_id: str, report_data: dict[str, Any]) -> dict[str, str]:
         import json
         try:
             message = json.dumps(report_data)
@@ -173,8 +175,12 @@ class HederaProtocol:
             if getattr(self, 'is_mock', False):
                 # Fake delay for "wow" effect
                 time.sleep(1)
+                mock_txn_id = f"mock-{int(time.time() * 1000)}"
                 logger.info("Mock notarization successful (No SDK)")
-                return "SUCCESS (MOCK)"
+                return {
+                    "status": "SUCCESS (MOCK)",
+                    "transaction_id": mock_txn_id,
+                }
 
             from hiero_sdk_python import TopicMessageSubmitTransaction, TopicId
             operator_key = self._get_operator_key()
@@ -189,6 +195,7 @@ class HederaProtocol:
             
             tx_response = transaction.execute(self.client)
             receipt = self._get_receipt(tx_response)
+            transaction_id = self._extract_transaction_id(tx_response)
             
             # El status puede ser un int o un objeto Status
             status_obj = receipt.status
@@ -199,14 +206,32 @@ class HederaProtocol:
                 status = "SUCCESS" if status_obj == 22 else f"STATUS_{status_obj}"
             
             logger.info(f"Notarization successful: {status}")
-            return status
+            return {
+                "status": status,
+                "transaction_id": transaction_id,
+            }
             
         except Exception as e:
             if getattr(self, 'is_mock', False):
                 logger.info("Mock notarization successful (No SDK)")
-                return "SUCCESS (MOCK)"
+                mock_txn_id = f"mock-{int(time.time() * 1000)}"
+                return {
+                    "status": "SUCCESS (MOCK)",
+                    "transaction_id": mock_txn_id,
+                }
             logger.error(f"Failed to notarize: {e}")
-            return f"ERROR: {str(e)}"
+            return {
+                "status": f"ERROR: {str(e)}",
+                "transaction_id": "",
+            }
+
+    def _extract_transaction_id(self, tx_response: Any) -> str:
+        """Extrae transaction ID en formato string desde el response del SDK."""
+        for attr in ("transaction_id", "transactionId"):
+            tx_id = getattr(tx_response, attr, None)
+            if tx_id:
+                return str(tx_id)
+        return ""
     
     def get_topic_messages(self, topic_id: str, limit: int = 10) -> list[dict]:
         """

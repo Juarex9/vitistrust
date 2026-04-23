@@ -1,7 +1,7 @@
 export default function StatsRow({ t }) {
   const stats = [
     { key: 'satellites', value: 'Sentinel-2', sub: '10m resolution', color: 'emerald' },
-    { key: 'networks', value: '2', sub: 'Hedera + RSK', color: 'violet' },
+    { key: 'networks', value: '2', sub: 'Hedera + Stellar', color: 'violet' },
     { key: 'audits', value: 'AI', sub: 'DeepSeek-R1', color: 'amber' }
   ]
 
