@@ -1285,6 +1285,65 @@ async def get_certificate(farm_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@app.get("/certificate/{farm_id}/pdf")
+async def get_certificate_pdf(farm_id: str) -> Response:
+    """
+    Genera certificado PDF descargable para un viñedo.
+    
+    Incluye: datos del viñedo, VitisScore, breakdown, hashes de Hedera/Stellar, evidencia.
+    """
+    from backend.certificate_generator import generate_certificate, REPORTLAB_AVAILABLE
+    
+    if not REPORTLAB_AVAILABLE:
+        raise HTTPException(
+            status_code=501,
+            detail="PDF generation not available (install reportlab)"
+        )
+    
+    # Obtener datos del certificate
+    evidence_index = _read_evidence_index()
+    entry = evidence_index.get(farm_id)
+    
+    lat = entry.get("lat") if entry else None
+    lon = entry.get("lon") if entry else None
+    region = entry.get("region") if entry else "Unknown"
+    evidence_cid = entry.get("evidence_cid", "") if entry else ""
+    
+    # Obtener datos de la auditoría más reciente
+    # Por ahora usamos datos guardados en evidence_index
+    try:
+        geolocation = validate_geolocation(lat or 0, lon or 0)
+    except Exception:
+        geolocation = {"region": "Unknown"}
+    
+    certificate_data = entry or {}
+    timestamp = certificate_data.get("timestamp", datetime.now(timezone.utc).isoformat())
+    
+    # Generar PDF
+    pdf_bytes = generate_certificate(
+        farm_id=farm_id,
+        lat=lat or -33.5,
+        lon=lon or -69.2,
+        region=geolocation.get("region", region),
+        vitis_score=certificate_data.get("vitis_score", 0),
+        justification=certificate_data.get("justification", "No data available"),
+        ndvi=certificate_data.get("ndvi", 0.0),
+        ndmi=certificate_data.get("ndmi", 0.0),
+        hedera_txn_id=certificate_data.get("hedera_txn_id", ""),
+        stellar_tx_hash=certificate_data.get("stellar_tx_hash", ""),
+        evidence_cid=evidence_cid,
+        timestamp=timestamp,
+    )
+    
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=vitis-certificate-{farm_id}.pdf"
+        },
+    )
+
+
 @app.get("/evidence/{farm_id}")
 async def get_evidence(farm_id: str) -> dict[str, Any]:
     """
