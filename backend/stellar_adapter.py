@@ -151,26 +151,19 @@ class SorobanAdapter:
     ) -> str:
         """Envía transacción real a Soroban."""
         try:
-            # Importar aquí para evitar errors si no está Instalado
             from stellar_sdk import (
-                Address, Keypair, Network, SorobanServer, TransactionBuilder,
-                Str, Vec as SorobanVec,
+                Keypair, Network, SorobanServer, TransactionBuilder,
+                scval,
             )
             
             server = self._SorobanServer(self.config.rpc_url)
-            
-            # Cargar clave del oracle
             keypair = self._Keypair.from_secret(self.config.oracle_secret)
-            
-            # Cargar account del oracle
             oracle_account = server.load_account(keypair.public_key)
-            
-            # Build transaction
             network = self._Network(self.config.network_passphrase)
             
-            # Convertir argumentos
-            farm_id_str = Str(farm_id)
-            evidence_str = Str(evidence_cid) if evidence_cid else Str("")
+            # Convertir argumentos usando scval
+            farm_id_scval = scval.from_string(farm_id)
+            evidence_scval = scval.from_string(evidence_cid) if evidence_cid else scval.from_string("")
             
             # Build invoke contract transaction
             txn = (
@@ -184,10 +177,10 @@ class SorobanAdapter:
                     contract_id=self.config.contract_id,
                     method="update_score",
                     args=[
-                        farm_id_str,
-                        score,
+                        farm_id_scval,
+                        scval.from_uint32(score),
                         hedera_txn_id,
-                        evidence_str,
+                        evidence_scval,
                     ],
                 )
                 .build()
@@ -197,8 +190,8 @@ class SorobanAdapter:
             tx = txn.sign(keypair)
             response = server.send_transaction(tx)
             
-            # Esperar resultado
-            seq = int(time.time())  # Simplificado
+            # Return hash (simplificado)
+            seq = int(time.time())
             return f"{keypair.public_key}_{seq}"
             
         except Exception as e:
