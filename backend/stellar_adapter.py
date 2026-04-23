@@ -158,22 +158,27 @@ class SorobanAdapter:
         # Convertir hedera_txn_id a hex
         hedera_hex = hedera_txn_id.hex()
         
+        # Usar bash -c para ejecutar en WSL con PATH correcto
         cmd = [
-            "wsl", "stellar", "contract", "invoke",
-            "--id", self.config.contract_id,
-            "--source", self.config.oracle_secret,
-            "--network", self.config.network.value,
-            "--json",
-            "--", "update_score",
-            f"--farm_id={farm_id}",
-            f"--score={score}",
-            f"--hedera_txn_id={hedera_hex}",
-            f"--evidence_cid={evidence_cid}",
+            "wsl", "bash", "-lc",
+            f"stellar contract invoke "
+            f"--id {self.config.contract_id} "
+            f"--source {self.config.oracle_secret} "
+            f"--network {self.config.network.value} "
+            f"--json -- "
+            f"update_score "
+            f"--farm_id {farm_id} "
+            f"--score {score} "
+            f"--hedera_txn_id {hedera_hex} "
+            f"--evidence_cid {evidence_cid}",
         ]
+        
+        logger.info(f"Executing: wsl bash -lc stellar contract invoke...")
         
         try:
             result = subprocess.run(
-                cmd,
+                " ".join(cmd),  # Join command as string for shell
+                shell=True,
                 capture_output=True,
                 text=True,
                 timeout=60,
