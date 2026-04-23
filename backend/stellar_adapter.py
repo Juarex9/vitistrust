@@ -123,8 +123,13 @@ Returns:
         
         logger.info(f"Executing stellar-cli command for {farm_id}")
         
-        # Convertir hedera_txn_id a hex
-        hedera_hex = hedera_txn_id.hex() if isinstance(hedera_txn_id, bytes) else hedera_txn_id
+        # Convertir hedera_txn_id a hex para CLI
+        if isinstance(hedera_txn_id, bytes):
+            hedera_hex = hedera_txn_id.hex()
+        elif isinstance(hedera_txn_id, str):
+            hedera_hex = hedera_txn_id
+        else:
+            hedera_hex = str(hedera_txn_id)
         
         # Usar ruta directa a stellar en WSL
         STELLAR_PATH = "/usr/local/bin/stellar"
