@@ -1,5 +1,7 @@
 # agents/validation_agent.py
+import json
 import logging
+from pathlib import Path
 from typing import Any
 from web3 import Web3
 
@@ -7,7 +9,68 @@ from backend.benchmarks import compute_regional_benchmark
 
 logger = logging.getLogger("vitistrust.validation")
 
-# Mendoza wine regions approximate bounding boxes
+# Cargar regiones vinícolas desde GeoJSON
+WINE_REGIONS_GEOJSON = None
+REGIONS_FILE = Path("backend/data/wine_regions.json")
+
+def _load_wine_regions() -> dict:
+    """Carga regiones desde archivo GeoJSON."""
+    global WINE_REGIONS_GEOJSON
+    if WINE_REGIONS_GEOJSON is None:
+        if REGIONS_FILE.exists():
+            WINE_REGIONS_GEOJSON = json.loads(REGIONS_FILE.read_text(encoding="utf-8"))
+        else:
+            WINE_REGIONS_GEOJSON = {"features": []}
+    return WINE_REGIONS_GEOJSON
+
+def _point_in_polygon(lat: float, lon: float, polygon: list) -> bool:
+    """Ray casting algorithm para verificar si punto está dentro del polígono."""
+    n = len(polygon)
+    inside = False
+    j = n - 1
+    for i in range(n):
+        xi, yi = polygon[i]
+        xj, yj = polygon[j]
+        if ((yi > lat) != (yj > lat)) and (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+def validate_geolocation_polygon(lat: float, lon: float) -> dict[str, Any]:
+    """
+    Valida coordenadas contra polígonos GeoJSON reales.
+    
+    Args:
+        lat: Latitud
+        lon: Longitud
+        
+    Returns:
+        Dict con validación, región y metadata
+    """
+    geojson = _load_wine_regions()
+    
+    for feature in geojson.get("features", []):
+        props = feature.get("properties", {})
+        geometry = feature.get("geometry", {})
+        
+        if geometry.get("type") != "Polygon":
+            continue
+            
+        coords = geometry.get("coordinates", [[]])[0]  # Primer ring
+        if _point_in_polygon(lat, lon, coords):
+            return {
+                "valid": True,
+                "region": props.get("name"),
+                "region_key": props.get("region_key"),
+                "province": props.get("province"),
+                "avg_ndvi": props.get("avg_ndvi"),
+                "wine_type": props.get("type"),
+                "method": "polygon",
+                "message": f"Coordinates within {props.get('name')}, {props.get('province')}"
+            }
+    
+    # Fallback a bounding box
+    return validate_geolocation(lat, lon)
 WINE_REGIONS = {
     "VALLE_DE_UCO": {
         "name": "Valle de Uco",
@@ -55,15 +118,22 @@ ERC721_INTERFACE_ID = "0x80ac58cd"
 
 def validate_geolocation(lat: float, lon: float) -> dict[str, Any]:
     """
-    Validate that coordinates are within known wine regions of Mendoza.
+    Validate that coordinates are within known wine regions.
+    Primero intenta polígonos GeoJSON, luego fallback a bounding boxes.
     
     Args:
-        lat: Latitude
-        lon: Longitude
+        lat: Latitud
+        lon: Longitud
         
     Returns:
-        Dict with status, region_name, and distance_to_nearest
+        Dict con status, region_name, y metadata
     """
+    # Primero intentar con polígonos
+    result = validate_geolocation_polygon(lat, lon)
+    if result.get("valid"):
+        return result
+    
+    # Fallback a bounding boxes para backwards compatibility
     for region_key, region in WINE_REGIONS.items():
         if (region["lat_min"] <= lat <= region["lat_max"] and 
             region["lon_min"] <= lon <= region["lon_max"]):
@@ -71,6 +141,7 @@ def validate_geolocation(lat: float, lon: float) -> dict[str, Any]:
                 "valid": True,
                 "region": region["name"],
                 "region_key": region_key,
+                "method": "bounding_box",
                 "message": f"Coordinates within {region['name']}"
             }
     
