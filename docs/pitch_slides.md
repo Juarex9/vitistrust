@@ -296,7 +296,7 @@ Pero...
 | **Frontend** | React + Vite + CSS |
 | **Backend** | FastAPI + Python |
 | **Satellite** | Sentinel-2 via Sentinel Hub |
-| **AI** | Groq + DeepSeek-R1 |
+| **AI** | Groq + Llama 3.3 70B |
 | **Consensus** | Hedera HCS |
 | **Smart Contract** | Solidity + Rootstock EVM |
 | **DevOps** | Foundry (contracts) |

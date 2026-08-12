@@ -419,10 +419,14 @@ def validate_vineyard(
     )
     
     # 3. ERC-721 contract validation
-    validations["contract"] = validate_erc721_contract(w3, asset_address) if w3.is_address(asset_address) else {
-        "valid": False,
-        "message": "Invalid address format"
-    }
+    validations["contract"] = (
+        validate_erc721_contract(w3, asset_address)
+        if Web3.is_address(asset_address)
+        else {
+            "valid": False,
+            "message": "Invalid address format",
+        }
+    )
     
     # 4. Token existence
     if validations["contract"]["valid"]:

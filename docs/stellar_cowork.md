@@ -1,5 +1,7 @@
 # Stellar Cowork - Presentación VitisTrust
 
+> **LEGACY / ARCHIVED**: Este documento describe la integración Stellar/Soroban que fue reemplazada por Rootstock (VitisRegistry.sol). Ver DEPLOY.md y contracts/VitisRegistry.sol.
+
 ## 🗓️ Fecha
 Jueves - Preparate 10-15 minutos de presentación
 

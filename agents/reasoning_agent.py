@@ -206,7 +206,11 @@ def _fallback_verdict(error_msg: str) -> dict[str, Any]:
             "humidity": {"weight": SCORE_WEIGHTS["humidity"], "component_score": 0.0, "contribution": 0.0},
             "temporal_consistency": {"weight": SCORE_WEIGHTS["temporal_consistency"], "component_score": 0.0, "contribution": 0.0},
             "data_quality": {"weight": SCORE_WEIGHTS["data_quality"], "component_score": 0.0, "contribution": 0.0},
-            "ai_reliability": {"weight": SCORE_WEIGHTS["ai_reliability"], "component_score": 0.0, "contribution": 0.0},
+            "regional_benchmark": {
+                "weight": SCORE_WEIGHTS["regional_benchmark"],
+                "component_score": 0.0,
+                "contribution": 0.0,
+            },
         },
         "total_score": 0,
     }

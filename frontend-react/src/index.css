@@ -1319,6 +1319,28 @@ main {
   text-transform: uppercase;
 }
 
+.proof-mock-badge,
+.modal-mock-badge {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+  margin-left: 0.35rem;
+  text-transform: uppercase;
+}
+
+.modal-mock-note {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: #b45309;
+  line-height: 1.4;
+}
+
 .p-hash, .p-link {
   font-family: var(--font-mono);
   font-size: 0.7rem;

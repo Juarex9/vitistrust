@@ -27,7 +27,23 @@ VITIS_ABI = [
         "outputs": [
             {"internalType": "uint256", "name": "score", "type": "uint256"},
             {"internalType": "uint256", "name": "timestamp", "type": "uint256"},
-            {"internalType": "string", "name": "hederaTopicId", "type": "string"}
+            {"internalType": "string", "name": "topicId", "type": "string"},
+            {"internalType": "uint256", "name": "scoringModelVersion", "type": "uint256"}
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {"internalType": "address", "name": "assetContract", "type": "address"},
+            {"internalType": "uint256", "name": "tokenId", "type": "uint256"}
+        ],
+        "name": "getCertification",
+        "outputs": [
+            {"internalType": "uint256", "name": "score", "type": "uint256"},
+            {"internalType": "uint256", "name": "timestamp", "type": "uint256"},
+            {"internalType": "string", "name": "topicId", "type": "string"},
+            {"internalType": "uint256", "name": "scoringModelVersion", "type": "uint256"}
         ],
         "stateMutability": "view",
         "type": "function"

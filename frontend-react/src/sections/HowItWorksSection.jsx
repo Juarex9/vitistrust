@@ -29,12 +29,12 @@ export default function HowItWorksSection({ t, scrollTo }) {
           <p>European satellite provides 10m multispectral images. We use NDVI to measure vegetation health objectively.</p>
         </div>
         <div className="detail-card">
-          <h3>🤖 DeepSeek-R1</h3>
+          <h3>🤖 Llama 3.3 (Groq)</h3>
           <p>AI analyzes satellite data and generates a VitisScore (0-100) with detailed justification.</p>
         </div>
         <div className="detail-card">
           <h3>⛓️ Doble Blockchain</h3>
-          <p>Hedera HCS records results immutably. Stellar Soroban stores VitisScore on-chain with low fees.</p>
+          <p>Hedera HCS records results immutably. Rootstock (EVM) anchors the certification on-chain through <code>VitisRegistry.sol</code>.</p>
         </div>
       </div>
 

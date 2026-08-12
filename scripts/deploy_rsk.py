@@ -57,7 +57,8 @@ def deploy():
         print("ERROR: Cannot connect to RSK network")
         sys.exit(1)
     
-    print(f"[*] Connected to RSK: chain_id={w3.eth.chain_id}")
+    chain_id = w3.eth.chain_id
+    print(f"[*] Connected to RSK: chain_id={chain_id}")
     
     account = w3.eth.account.from_key(private_key)
     print(f"[*] Deploying from: {account.address}")
@@ -75,14 +76,15 @@ def deploy():
     
     Contract = w3.eth.contract(abi=abi, bytecode=bytecode)
     tx_hash = Contract.constructor().build_transaction({
-        "chainId": 31,
+        "chainId": chain_id,
         "gasPrice": w3.eth.gas_price,
         "from": account.address,
         "nonce": w3.eth.get_transaction_count(account.address),
     })
     
     signed = w3.eth.account.sign_transaction(tx_hash, private_key=private_key)
-    tx = w3.eth.send_raw_transaction(signed.raw_transaction)
+    raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
+    tx = w3.eth.send_raw_transaction(raw)
     
     print(f"[*] Transaction sent: {tx.hex()}")
     print("[*] Waiting for confirmation...")

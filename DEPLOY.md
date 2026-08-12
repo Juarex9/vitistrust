@@ -23,7 +23,7 @@ Frontend (Vercel)          Backend (Render)
    - Sentinel Hub (satellite imagery)
    - Groq (AI analysis)
    - Hedera (notarization)
-   - Stellar Soroban RPC (smart contracts)
+   - Rootstock (RSK) RPC (smart contracts — EVM)
 
 ---
 
@@ -58,12 +58,12 @@ Frontend (Vercel)          Backend (Render)
 Add these in Render dashboard → Environment:
 
 ```bash
-# ===== STELLAR SOROBAN (Asset Layer) =====
-STELLAR_NETWORK=testnet
-STELLAR_RPC_URL=https://soroban-testnet.stellar.org:443
-STELLAR_ORACLE_SECRET=your_oracle_secret
-SOROBAN_CONTRACT_ID=CA...        # Deployed contract address
-STELLAR_TIMEOUT_S=60
+# ===== ROOTSTOCK / RSK (Asset Layer — EVM) =====
+RSK_RPC_URL=https://public-node.testnet.rsk.co
+RSK_CONTRACT_ADDRESS=0x...       # Deployed VitisRegistry address
+RSK_PRIVATE_KEY=0x...            # Oracle wallet private key
+RSK_NETWORK=rsk-testnet
+ROOTSTOCK_TIMEOUT_S=120
 
 # ===== HEDERA (Trust Layer) =====
 HEDERA_ACCOUNT_ID=0.0.xxxxxx
@@ -77,7 +77,20 @@ SENTINEL_CLIENT_SECRET=...
 # ===== AI (Groq) =====
 AI_API_KEY=...
 AI_MODEL=llama-3.3-70b-versatile
+
+# ===== API / security (recommended in production) =====
+ENVIRONMENT=production
+CORS_ORIGINS=https://vitistrust.vercel.app,http://localhost:5173
+ADMIN_API_KEY=generate-a-long-random-secret
+REQUIRE_ADMIN_API_KEY=true
+VERIFY_RATE_LIMIT_PER_MINUTE=10
+EVIDENCE_INDEX_PATH=backend/data/evidence_index.json
+DISPUTES_STORE_PATH=backend/data/disputes.json
 ```
+
+Notes:
+- Admin endpoints (`/disputes/*`, `POST /arbitration/scoring-model`) require header `X-Admin-API-Key`.
+- Evidence/disputes JSON persist on disk — on Render the filesystem is ephemeral unless you attach a disk.
 
 ### Health Check
 
@@ -90,10 +103,12 @@ Expected response:
 ```json
 {
   "status": "healthy",
-  "rsk": "connected",
+  "rootstock": "configured",
   "hedera": "connected"
 }
 ```
+
+If Rootstock runs in stub mode (no RPC/contract/key), `rootstock` will be `"configured (stub)"` instead.
 
 ---
 
@@ -170,7 +185,17 @@ Visit: `https://your-vercel-project.vercel.app`
    - NDVI image
    - VitisScore
    - Hedera topic ID
-   - Stellar transaction hash
+   - Rootstock transaction hash (`rootstock_tx_hash`)
+
+### Deploy Smart Contract (Rootstock)
+
+Before production, deploy `VitisRegistry.sol` and set `RSK_CONTRACT_ADDRESS`:
+
+```bash
+python scripts/deploy_rsk.py
+```
+
+Requires `RSK_RPC_URL` and `RSK_PRIVATE_KEY` in your environment (see `.env.example`).
 
 ---
 
@@ -225,7 +250,7 @@ uvicorn backend.main:app --reload
 ## Security Notes
 
 1. **Never commit `.env` files** - Use Render/Vercel environment variables
-2. **Rotate keys regularly** - Especially STELLAR_ORACLE_SECRET
+2. **Rotate keys regularly** - Especially `RSK_PRIVATE_KEY` (oracle wallet)
 3. **Use testnet first** - Don't use mainnet private keys until production-ready
 4. **Rate limiting** - Consider adding rate limiting for production
 

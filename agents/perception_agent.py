@@ -8,7 +8,6 @@ import requests
 
 from dotenv import load_dotenv
 import os
-from backend.time_window import build_time_window
 
 load_dotenv()
 
@@ -19,22 +18,49 @@ SATELLITE_PROCESS_URL = "https://services.sentinel-hub.com/api/v1/process"
 
 _token_cache = {"token": None, "expires": 0}
 
+STATS_EVALSCRIPT = """
+//VERSION=3
+function setup() {
+  return {
+    input: [{ bands: ["B04", "B08", "B11", "dataMask"] }],
+    output: [
+      { id: "ndvi", bands: 1 },
+      { id: "ndmi", bands: 1 },
+      { id: "dataMask", bands: 1 }
+    ]
+  };
+}
+function evaluatePixel(samples) {
+  let ndvi = (samples.B08 - samples.B04) / (samples.B08 + samples.B04);
+  let ndmi = (samples.B08 - samples.B11) / (samples.B08 + samples.B11);
+  let valid = 1;
+  if (!isFinite(ndvi) || !isFinite(ndmi)) {
+    valid = 0;
+  }
+  return {
+    ndvi: [ndvi],
+    ndmi: [ndmi],
+    dataMask: [samples.dataMask * valid]
+  };
+}
+"""
+
 
 def _get_sentinel_token() -> str | None:
     """Obtiene access token de Sentinel Hub OAuth."""
     global _token_cache
     now = time.time()
-    
+
     if _token_cache["token"] and now < _token_cache["expires"] - 60:
         return _token_cache["token"]
-    
+
     client_id = os.getenv("SENTINEL_CLIENT_ID")
     client_secret = os.getenv("SENTINEL_CLIENT_SECRET")
-    
+
     if not client_id or not client_secret:
         logger.error("SENTINEL_CLIENT_ID or SENTINEL_CLIENT_SECRET not configured")
         return None
-    
+
     try:
         resp = requests.post(
             "https://services.sentinel-hub.com/oauth/token",
@@ -43,7 +69,7 @@ def _get_sentinel_token() -> str | None:
                 "client_id": client_id,
                 "client_secret": client_secret,
             },
-            timeout=15
+            timeout=15,
         )
         if resp.status_code == 200:
             data = resp.json()
@@ -52,20 +78,13 @@ def _get_sentinel_token() -> str | None:
             return _token_cache["token"]
     except Exception as e:
         logger.error(f"Sentinel OAuth failed: {e}")
-    
+
     return None
 
 
 def get_real_ndvi(lat: float, lon: float, date_from: str | None = None, date_to: str | None = None) -> dict[str, Any]:
     """
     Consulta el índice NDVI de un viñedo usando Sentinel-2 via Sentinel Hub.
-    
-    Args:
-        lat: Latitud de la parcela
-        lon: Longitud de la parcela
-        
-    Returns:
-        Dict con status, ndvi, coordinates, source
     """
     result = get_real_indices(lat, lon)
     if result["status"] == "success":
@@ -78,8 +97,37 @@ def get_real_ndvi(lat: float, lon: float, date_from: str | None = None, date_to:
     return _fallback_ndvi(lat, lon)
 
 
+def _extract_mean(outputs: dict[str, Any], channel: str) -> float | None:
+    channel_data = outputs.get(channel, {})
+    bands = channel_data.get("bands", {})
+    band_data = bands.get("B0", {})
+    stats = band_data.get("stats", {})
+    mean = stats.get("mean")
+    if mean is None:
+        return None
+    try:
+        value = float(mean)
+    except (TypeError, ValueError):
+        return None
+    if value != value:  # NaN
+        return None
+    return value
+
+
+def _pick_latest_stats_interval(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Elige el intervalo más reciente con estadísticas válidas."""
+    rows = payload.get("data") or []
+    for row in reversed(rows):
+        outputs = row.get("outputs") or {}
+        ndvi = _extract_mean(outputs, "ndvi")
+        ndmi = _extract_mean(outputs, "ndmi")
+        if ndvi is not None and ndmi is not None:
+            return {"ndvi": ndvi, "ndmi": ndmi, "interval": row.get("interval")}
+    return None
+
+
 def get_real_indices(lat: float, lon: float) -> dict[str, Any]:
-    """Consulta NDVI + NDMI reales desde Sentinel Hub Process API."""
+    """Consulta NDVI + NDMI reales desde Sentinel Hub Statistical API."""
     token = _get_sentinel_token()
     if not token:
         logger.warning("No Sentinel token, using fallback NDVI/NDMI")
@@ -91,22 +139,6 @@ def get_real_indices(lat: float, lon: float) -> dict[str, Any]:
     date_to = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     date_from = (now_utc - timedelta(days=180)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    evalscript = """
-    //VERSION=3
-    function setup() {
-        return {
-            input: ["B04", "B08", "B11", "dataMask"],
-            output: { id: "default", bands: 3 }
-        };
-    }
-    function evaluatePixel(sample) {
-        if (sample.dataMask === 0) return [0, 0, 0];
-        let ndvi = (sample.B08 - sample.B04) / (sample.B08 + sample.B04);
-        let ndmi = (sample.B08 - sample.B11) / (sample.B08 + sample.B11);
-        return [ndvi, ndmi, sample.dataMask];
-    }
-    """
-
     payload = {
         "input": {
             "bounds": {
@@ -117,77 +149,61 @@ def get_real_indices(lat: float, lon: float) -> dict[str, Any]:
                 {
                     "type": "sentinel-2-l2a",
                     "dataFilter": {
-                        "timeRange": {"from": date_from, "to": date_to},
                         "maxCloudCoverage": 50,
+                        "mosaickingOrder": "leastCC",
                     },
                 }
             ],
         },
-        "output": {"responses": [{"identifier": "default", "format": {"type": "image/png"}}]},
-        "evalscript": evalscript,
+        "aggregation": {
+            "timeRange": {"from": date_from, "to": date_to},
+            "aggregationInterval": {"of": "P30D"},
+            "width": 64,
+            "height": 64,
+            "evalscript": STATS_EVALSCRIPT,
+        },
     }
 
     try:
         response = requests.post(
-            SATELLITE_PROCESS_URL,
+            SATELLITE_STATS_URL,
             json=payload,
-            headers={"Authorization": f"Bearer {token}"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
             timeout=60,
         )
         if response.status_code == 401:
             logger.warning("Sentinel token expired, using fallback")
             _token_cache["token"] = None
             return _fallback_indices(lat, lon)
-        if response.status_code != 200 or len(response.content) < 1000:
-            logger.warning(f"Sentinel Process API error: {response.status_code}, using fallback")
+        if response.status_code != 200:
+            logger.warning(
+                "Sentinel Statistics API error: %s, using fallback",
+                response.status_code,
+            )
             return _fallback_indices(lat, lon)
 
-        img_data = response.content
-        ndvi_vals = []
-        ndmi_vals = []
-
-        for y in range(0, min(512, len(img_data) // 4), 10):
-            for x in range(0, min(512, len(img_data) // 4), 10):
-                idx = (y * 512 + x) * 4
-                if idx + 2 < len(img_data):
-                    r, g, b = img_data[idx], img_data[idx + 1], img_data[idx + 2]
-                    ndvi_sample = (r - b) / (r + b) if (r + b) > 0 else 0
-                    ndmi_sample = (r - g) / (r + g) if (r + g) > 0 else 0
-                    if abs(ndvi_sample) < 1.0 and abs(ndmi_sample) < 1.0:
-                        ndvi_vals.append(ndvi_sample)
-                        ndmi_vals.append(ndmi_sample)
-
-        if not ndvi_vals:
-            logger.warning("No valid pixels from Process API, using fallback")
+        picked = _pick_latest_stats_interval(response.json())
+        if not picked:
+            logger.warning("No valid statistics intervals, using fallback")
             return _fallback_indices(lat, lon)
-
-        ndvi = sum(ndvi_vals) / len(ndvi_vals)
-        ndmi = sum(ndmi_vals) / len(ndmi_vals)
 
         return {
             "status": "success",
-            "ndvi": round(ndvi, 3),
-            "ndmi": round(ndmi, 3),
+            "ndvi": round(max(-1.0, min(1.0, picked["ndvi"])), 3),
+            "ndmi": round(max(-1.0, min(1.0, picked["ndmi"])), 3),
             "coordinates": {"lat": lat, "lon": lon},
-            "source": "Sentinel-2 L2A via Sentinel Hub Process API",
+            "source": "Sentinel-2 L2A via Sentinel Hub Statistical API",
         }
     except requests.RequestException as e:
         logger.error(f"Sentinel Hub API error: {e}")
         return _fallback_indices(lat, lon)
     except Exception as e:
-        logger.error(f"Failed to parse Sentinel response: {e}")
+        logger.error(f"Failed to parse Sentinel statistics response: {e}")
         return _fallback_indices(lat, lon)
-
-
-def _extract_mean(outputs: dict[str, Any], channel: str) -> float | None:
-    channel_data = outputs.get(channel, {})
-    bands = channel_data.get("bands", {})
-    band_data = bands.get("B0", {})
-    stats = band_data.get("stats", {})
-    mean = stats.get("mean")
-    if mean is None:
-        return None
-    return float(mean)
 
 
 def _fallback_ndvi(lat: float, lon: float) -> dict[str, Any]:
@@ -198,7 +214,7 @@ def _fallback_ndvi(lat: float, lon: float) -> dict[str, Any]:
         "status": "success",
         "ndvi": round(base_ndvi, 3),
         "coordinates": {"lat": lat, "lon": lon},
-        "source": "Fallback (demo mode)"
+        "source": "Fallback (demo mode)",
     }
 
 

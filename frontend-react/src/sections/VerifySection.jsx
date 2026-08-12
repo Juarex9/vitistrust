@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import SatelliteView from '../components/SatelliteView'
-import TimeMachine from '../components/TimeMachine'
 import OracleModal from '../components/OracleModal'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'https://vitistrust.onrender.com'
@@ -60,6 +59,7 @@ export default function VerifySection({ t }) {
     humidity: 'Humidity',
     temporal_consistency: 'Temporal',
     data_quality: 'Data Quality',
+    regional_benchmark: 'Regional Benchmark',
     ai_reliability: 'AI Reliability'
   }
 
@@ -68,8 +68,14 @@ export default function VerifySection({ t }) {
     humidity: '#3b82f6',
     temporal_consistency: '#a78bfa',
     data_quality: '#f59e0b',
+    regional_benchmark: '#14b8a6',
     ai_reliability: '#14b8a6'
   }
+
+  const isRootstockStub =
+    Boolean(result?.rootstock_stub) ||
+    String(result?.rootstock_tx_hash || '').startsWith('mock_rsk_') ||
+    String(result?.rootstock_tx_hash || '').includes('mock')
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -78,15 +84,32 @@ export default function VerifySection({ t }) {
     const lon = formData.get('lon')
     const farmId = formData.get('farmId')
 
+    const asset = (formData.get('asset') || '').toString().trim()
+    const tokenRaw = (formData.get('tokenId') || '').toString().trim()
+
     setLoading(true)
     setError(null)
     setResult(null)
     setStatusType('loading')
 
     try {
-      const url = verifyMode === 'check' 
-        ? `${API_BASE}/certificate/${farmId}`
-        : `${API_BASE}/verify-vineyard?lat=${lat}&lon=${lon}&farm_id=${farmId}`
+      let url
+      if (verifyMode === 'check') {
+        const params = new URLSearchParams()
+        if (asset) params.set('asset_address', asset)
+        if (tokenRaw) params.set('token_id', tokenRaw)
+        const qs = params.toString()
+        url = `${API_BASE}/certificate/${encodeURIComponent(String(farmId))}${qs ? `?${qs}` : ''}`
+      } else {
+        const params = new URLSearchParams({
+          lat: String(lat),
+          lon: String(lon),
+          farm_id: String(farmId),
+        })
+        if (asset) params.set('asset_address', asset)
+        if (tokenRaw) params.set('token_id', tokenRaw)
+        url = `${API_BASE}/verify-vineyard?${params.toString()}`
+      }
       
       const response = await fetch(url)
       if (!response.ok) throw new Error((await response.json()).detail || 'Verification failed')
@@ -140,13 +163,31 @@ export default function VerifySection({ t }) {
                     <label htmlFor="farmId">{t.form.farm}</label>
                     <input type="text" id="farmId" name="farmId" placeholder="mendoza_1" required />
                   </div>
+                  <div className="form-group full-width">
+                    <label htmlFor="asset">{t.form.asset}</label>
+                    <input type="text" id="asset" name="asset" placeholder="0x…" />
+                  </div>
+                  <div className="form-group full-width">
+                    <label htmlFor="tokenIdField">{t.form.token}</label>
+                    <input type="text" id="tokenIdField" name="tokenId" placeholder="1" />
+                  </div>
                 </>
               )}
               {verifyMode === 'check' && (
+                <>
                 <div className="form-group full-width">
                   <label htmlFor="farmId">{t.form.farm}</label>
                   <input type="text" id="farmId" name="farmId" placeholder="mendoza_1" required />
                 </div>
+                <div className="form-group full-width">
+                  <label htmlFor="asset">{t.form.asset}</label>
+                  <input type="text" id="asset" name="asset" placeholder="0x…" />
+                </div>
+                <div className="form-group full-width">
+                  <label htmlFor="tokenIdField">{t.form.token}</label>
+                  <input type="text" id="tokenIdField" name="tokenId" placeholder="1" />
+                </div>
+                </>
               )}
             </div>
             <button type="submit" className="verify-btn" disabled={loading}>
@@ -227,7 +268,12 @@ export default function VerifySection({ t }) {
                     {timeMachineData?.history && (
                       <div className="time-machine">
                         <div className="tm-header">
-                          <span className="tm-title">⏱️ Time Machine</span>
+                          <span className="tm-title">
+                            ⏱️ Time Machine
+                            {(timeMachineData.demo || timeMachineData.source === 'synthetic_demo') && (
+                              <span className="proof-mock-badge">DEMO</span>
+                            )}
+                          </span>
                           <span className="tm-current-date">{timeMachineData.history[timeMachineIndex]?.date}</span>
                         </div>
                         <input type="range" className="tm-slider" min="0" max={timeMachineData.history.length - 1} value={timeMachineIndex} onChange={(e) => setTimeMachineIndex(parseInt(e.target.value))} />
@@ -276,10 +322,6 @@ export default function VerifySection({ t }) {
                       </div>
                     )}
 
-                    <div className="quick-validation-grid">
-                      <div className={`val-pill ${result.validation?.geolocation?.valid ? 'ok' : 'warn'}`}>📍 Geo</div>
-                      <div className={`val-pill ${result.validation?.vegetation?.valid ? 'ok' : 'warn'}`}>🌿 NDVI: {result.ndvi?.toFixed(3)}</div>
-                    </div>
                     {result?.validation && (
                       <div className="quick-validation-grid">
                         <div className={`val-pill ${validationGeo?.valid ? 'ok' : 'warn'}`}>📍 Geo</div>
@@ -339,14 +381,22 @@ export default function VerifySection({ t }) {
                         <span className="p-icon">◈</span>
                         <div className="p-data">
                           <span className="p-label">Hedera HCS</span>
-                          <span className="p-hash">{result.hedera_notarization}</span>
+                          <span className="p-hash">{result.hedera_txn_id || result.hedera_notarization}</span>
                         </div>
                       </div>
                       <div className="proof-item">
-                        <span className="p-icon">✦</span>
+                        <span className="p-icon">⬡</span>
                         <div className="p-data">
-                          <span className="p-label">Stellar TX</span>
-                          <span className="p-hash">{result.stellar_tx_hash?.substring(0, 16)}...</span>
+                          <span className="p-label">
+                            Rootstock TX
+                            {isRootstockStub && (
+                              <span className="proof-mock-badge"> {t.oracle?.mockBadge || 'MOCK'}</span>
+                            )}
+                          </span>
+                          <span className="p-hash">
+                            {(result.rootstock_tx_hash || '').substring(0, 16)}
+                            {(result.rootstock_tx_hash || '').length > 16 ? '...' : ''}
+                          </span>
                         </div>
                       </div>
                     </div>

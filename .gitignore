@@ -7,6 +7,13 @@ venv/
 env/
 __pycache__/
 *.py[cod]
+
+# Runtime stores (ephemeral locally / on Render)
+backend/data/disputes.json
+backend/data/evidence_index.json
+
+# Local Cursor harness / agent rules
+.cursor/
 # --- BLOCKCHAIN & SMART CONTRACTS ---
 # Si usas Hardhat o Foundry en el futuro
 artifacts/

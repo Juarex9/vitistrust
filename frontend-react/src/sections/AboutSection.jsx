@@ -38,9 +38,9 @@ export default function AboutSection({ t, scrollTo }) {
         <h2>Tech Stack</h2>
         <div className="tech-tags">
           <span className="tech-tag">Sentinel-2</span>
-          <span className="tech-tag">DeepSeek-R1</span>
+          <span className="tech-tag">Llama 3.3 (Groq)</span>
           <span className="tech-tag">Hedera HCS</span>
-          <span className="tech-tag">Stellar Soroban</span>
+          <span className="tech-tag">Rootstock (RSK)</span>
           <span className="tech-tag">FastAPI</span>
           <span className="tech-tag">React</span>
         </div>

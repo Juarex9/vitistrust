@@ -4,7 +4,7 @@
 
 VitisTrust is an Oracle Verification system for vineyard NFT verification. It uses
 satellite data and AI to assess vineyard health and records certifications on Hedera
-and Stellar Soroban networks.
+(HCS — Trust Layer) and Rootstock (RSK EVM — Asset Layer via `VitisRegistry.sol`).
 
 ## Project Structure
 
@@ -13,14 +13,16 @@ vitistrust/
 ├── agents/                    # AI Agents
 │   ├── protocol_agent.py     # Hedera HCS notarization
 │   ├── perception_agent.py   # Satellite data (Sentinel-2)
-│   └── reasoning_agent.py    # AI analysis (DeepSeek-R1)
+│   └── reasoning_agent.py    # AI analysis (Llama 3.3 via Groq)
 ├── backend/
 │   ├── main.py               # FastAPI application
+│   ├── rootstock_adapter.py  # Rootstock / Web3 adapter
 │   └── constants.py          # Contract ABIs
 ├── scripts/
-│   └── deploy_stellar.py     # Deploy contract to Stellar Soroban
+│   └── deploy_rsk.py         # Deploy VitisRegistry to Rootstock
 ├── contracts/
-│   └── vitis_contract       # Soroban smart contract (Rust)
+│   ├── VitisRegistry.sol     # Active smart contract (Solidity / EVM)
+│   └── vitis_registry/       # LEGACY Soroban contract (Rust) — do not deploy
 ├── requirements.txt          # Python dependencies
 └── .env                      # Environment variables
 ```
@@ -80,21 +82,19 @@ black --check .
 isort --check-only .
 ```
 
-### Smart Contract (Stellar Soroban)
+### Smart Contract (Rootstock / Foundry)
 
 ```bash
-# Install stellar CLI (if needed)
-cargo install stellar-cli
+# Build and test (from repo root)
+forge build
+forge test
 
-# Build contract
-stellar contract build
-
-# Deploy to testnet
-stellar contract deploy --source your_soracle_account --network testnet
-
-# Deploy to mainnet
-stellar contract deploy --source your_soracle_account --network mainnet
+# Deploy to RSK testnet/mainnet
+python scripts/deploy_rsk.py
 ```
+
+Requires `RSK_RPC_URL`, `RSK_PRIVATE_KEY`, and optionally `RSK_NETWORK` (see `.env.example`).
+The legacy Soroban contract under `contracts/vitis_registry/` is archived — see `LEGACY.md`.
 
 ---
 
@@ -261,7 +261,7 @@ require(msg.sender == oracle, "Only VitisTrust Oracle can certify");
 
 - Never commit secrets to version control
 - Use `.env` for local development only
-- Prefix test variables with appropriate network (STELLAR_, HEDERA_)
+- Prefix test variables with appropriate network (`RSK_`, `HEDERA_`)
 - Validate required env vars at startup
 
 ```python
@@ -269,10 +269,10 @@ import os
 from functools import lru_cache
 
 @lru_cache
-def get_stellar_rpc_url() -> str:
-    url = os.getenv("STELLAR_RPC_URL")
+def get_rsk_rpc_url() -> str:
+    url = os.getenv("RSK_RPC_URL")
     if not url:
-        raise ValueError("STELLAR_RPC_URL not configured")
+        raise ValueError("RSK_RPC_URL not configured")
     return url
 ```
 
@@ -308,11 +308,12 @@ async def run_audit(contract_address: str, token_id: int) -> dict:
 Create a `.env` file with required variables:
 
 ```
-# ===== STELLAR SOROBAN (Asset Layer) =====
-STELLAR_NETWORK=testnet
-STELLAR_RPC_URL=https://soroban-testnet.stellar.org:443
-STELLAR_ORACLE_SECRET=your_oracle_secret
-SOROBAN_CONTRACT_ID=CA... (after deploy)
+# ===== ROOTSTOCK / RSK (Asset Layer — EVM) =====
+RSK_RPC_URL=https://public-node.testnet.rsk.co
+RSK_CONTRACT_ADDRESS=0x... (after deploy)
+RSK_PRIVATE_KEY=0x...
+RSK_NETWORK=rsk-testnet
+ROOTSTOCK_TIMEOUT_S=120
 
 # ===== HEDERA (Trust Layer) =====
 HEDERA_ACCOUNT_ID=0.0.xxxxxx
@@ -325,17 +326,14 @@ SENTINEL_CLIENT_SECRET=your_client_secret
 
 # ===== IA (GROQ) =====
 AI_API_KEY=your_groq_key
-AI_MODEL=deepseek-r1-distill-llama-70b
+AI_MODEL=llama-3.3-70b-versatile
 ```
 
 ### Deploy Contract
 
 ```bash
-# Deploy Soroban contract using stellar-cli
-stellar contract deploy --source your_soracle_account --network testnet
-
-# Or using the Python deployment script
-python scripts/deploy_stellar.py
+# Deploy VitisRegistry.sol to Rootstock
+python scripts/deploy_rsk.py
 ```
 
 ---
@@ -344,9 +342,10 @@ python scripts/deploy_stellar.py
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/health` | Health check (Stellar & Hedera connections) |
-| GET | `/verify-vineyard?lat=X&lon=Y&asset_address=Z&token_id=N` | Run full audit |
-| GET | `/certificate/{asset_address}/{token_id}` | Query existing certificate |
+| GET | `/health` | Health check (Rootstock & Hedera connections) |
+| POST | `/verify-vineyard` | Run full audit (JSON body: `farm_id`, `lat`, `lon`, `asset_address`, `token_id`) |
+| GET | `/verify-vineyard` | Run full audit (same params as query) |
+| GET | `/certificate/{farm_id}?asset_address=Z&token_id=N` | Query on-chain certification in VitisRegistry |
 
 ---
 
@@ -358,7 +357,7 @@ The system consists of four main components:
    Hedera Consensus Service (HCS)
 2. **Perception Agent** (`agents/perception_agent.py`): Fetches satellite imagery
    (Sentinel-2 via Sentinel Hub) and calculates NDVI
-3. **Reasoning Agent** (`agents/reasoning_agent.py`): Uses AI (DeepSeek-R1 via Groq)
+3. **Reasoning Agent** (`agents/reasoning_agent.py`): Uses AI (Llama 3.3 70B via Groq)
    to analyze data and generate VitisScore
 4. **Backend API** (`backend/main.py`): FastAPI app orchestrating the workflow and
-   recording proofs on Hedera (HCS) and Stellar Soroban
+   recording proofs on Hedera (HCS) and Rootstock (`VitisRegistry.sol` via `rootstock_adapter.py`)
