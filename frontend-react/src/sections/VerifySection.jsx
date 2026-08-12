@@ -236,7 +236,14 @@ export default function VerifySection({ t }) {
                           <div className="satellite-img">No satellite image available</div>
                         )}
                         <div className="oracle-badge" onClick={() => setShowOracleModal(true)}><span>🛡️</span></div>
-                        <div className="overlay-tag top-left">SENTINEL-2</div>
+                        <div className="overlay-tag top-left">
+                          {String(result.source || '').includes('gee')
+                            ? 'SENTINEL-2 · GEE'
+                            : String(result.source || '').toLowerCase().includes('fallback') ||
+                                String(result.source || '').toLowerCase().includes('demo')
+                              ? 'DEMO DATA'
+                              : 'SENTINEL-2'}
+                        </div>
                         <div className="overlay-tag bottom-right">MZA_{result.vitis_score}</div>
                       </div>
                       <div className="main-score-card">

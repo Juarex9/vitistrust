@@ -13,6 +13,7 @@ class AuditRequest(BaseModel):
     farm_id: str
     asset_address: str | None = None
     token_id: int | None = None
+    force_recertify: bool = False
 
 
 class AlertEvidence(BaseModel):

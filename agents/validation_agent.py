@@ -69,8 +69,10 @@ def validate_geolocation_polygon(lat: float, lon: float) -> dict[str, Any]:
                 "message": f"Coordinates within {props.get('name')}, {props.get('province')}"
             }
     
-    # Fallback a bounding box
-    return validate_geolocation(lat, lon)
+    # Sin match en polígonos: señal para que validate_geolocation intente bounding box.
+    # (No llamar a validate_geolocation acá: causaría recursión infinita, ya que
+    # validate_geolocation llama primero a validate_geolocation_polygon.)
+    return {"valid": False}
 WINE_REGIONS = {
     "VALLE_DE_UCO": {
         "name": "Valle de Uco",

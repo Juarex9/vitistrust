@@ -59,6 +59,24 @@ def expected_verify_schema_fields() -> set[str]:
     }
 
 
+class FakeSatelliteProvider:
+    """Proveedor satelital fake para tests (implementa el protocolo SatelliteProvider)."""
+
+    name = "fake"
+
+    def __init__(self, payload: dict):
+        self._payload = payload
+
+    async def fetch_indices(self, lat: float, lon: float) -> dict:
+        return self._payload
+
+    async def fetch_history(self, lat: float, lon: float, months: int) -> list:
+        return []
+
+    async def fetch_layer_image(self, lat: float, lon: float, ndvi: float, layer: str = "ndvi") -> str:
+        return "data:image/png;base64,AA=="
+
+
 @pytest.fixture
 def backend_module(
     monkeypatch: pytest.MonkeyPatch,
@@ -110,7 +128,9 @@ def backend_module(
 
     backend_main = importlib.reload(backend_main)
 
-    monkeypatch.setattr(backend_main, "get_real_indices", lambda lat, lon: satellite_payload)
+    import backend.deps as deps
+
+    monkeypatch.setattr(deps, "satellite_provider", FakeSatelliteProvider(satellite_payload))
     monkeypatch.setattr(backend_main, "analyze_vineyard_health", lambda sat_data: ai_verdict_payload)
     async def _mock_sentinel_token():
         return None
@@ -244,6 +264,145 @@ class TestBackendAPI:
             assert isinstance(item["date"], str)
             assert isinstance(item["ndvi"], float)
             assert item["status"] in {"healthy", "moderate", "stressed"}
+
+
+class TestOracleGates:
+    """Gates duros del oráculo: can_verify, certificado existente y datos demo."""
+
+    def test_can_verify_false_returns_422(self, api_client: TestClient):
+        """Coordenadas fuera de cualquier región vinícola -> geolocalización inválida -> 422."""
+        payload = {
+            "lat": 0.0,
+            "lon": 0.0,
+            "farm_id": "farm-invalid-geo",
+        }
+        response = api_client.post("/verify-vineyard", json=payload)
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert "failed_checks" in detail
+        assert any(check["check"] == "geolocation" for check in detail["failed_checks"])
+
+    def test_allow_unverified_certify_bypasses_gate(
+        self, api_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("ALLOW_UNVERIFIED_CERTIFY", "true")
+        payload = {
+            "lat": 0.0,
+            "lon": 0.0,
+            "farm_id": "farm-invalid-geo-allowed",
+        }
+        response = api_client.post("/verify-vineyard", json=payload)
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "ASSET_CERTIFIED"
+
+    def test_require_real_satellite_blocks_demo_source(
+        self, api_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        import backend.deps as deps
+
+        monkeypatch.setenv("REQUIRE_REAL_SATELLITE", "true")
+        monkeypatch.setattr(
+            deps,
+            "satellite_provider",
+            FakeSatelliteProvider(
+                {
+                    "status": "success",
+                    "ndvi": 0.71,
+                    "ndmi": 0.15,
+                    "coordinates": {"lat": -33.4942, "lon": -69.2429},
+                    "source": "Fallback (demo mode)",
+                }
+            ),
+        )
+
+        payload = {"lat": -33.4942, "lon": -69.2429, "farm_id": "farm-demo-blocked"}
+        response = api_client.post("/verify-vineyard", json=payload)
+
+        assert response.status_code == 422
+        assert "REQUIRE_REAL_SATELLITE" in response.json()["detail"]
+
+    @staticmethod
+    def _fake_validate_vineyard_with_existing_certificate(
+        lat, lon, ndvi, asset_address, token_id, w3, vitis_contract
+    ) -> dict:
+        return {
+            "all_valid": True,
+            "can_verify": True,
+            "validations": {
+                "geolocation": {"valid": True, "region": "Valle de Uco", "region_key": "VALLE_DE_UCO"},
+                "vegetation": {"valid": True, "health": "high"},
+                "contract": {"valid": True},
+                "token": {"valid": True, "exists": True},
+                "certificate": {
+                    "exists": True,
+                    "score": 88,
+                    "timestamp": 1710000000,
+                    "topic_id": "0.0.123456@1710000000.000000000",
+                },
+                "regional_benchmark": {
+                    "region": "Valle de Uco",
+                    "percentile_ndvi": 80.0,
+                    "delta_vs_region_avg": 0.1,
+                },
+            },
+        }
+
+    @staticmethod
+    def _make_adapter_on_chain_ready(monkeypatch: pytest.MonkeyPatch):
+        import backend.deps as deps
+
+        adapter = deps.rootstock_adapter
+        monkeypatch.setattr(adapter, "_w3", object(), raising=False)
+        monkeypatch.setattr(adapter, "_contract", object(), raising=False)
+        monkeypatch.setattr(adapter, "is_stub", False, raising=False)
+        return adapter
+
+    def test_certificate_exists_returns_409_without_force_recertify(
+        self, api_client: TestClient, backend_module, monkeypatch: pytest.MonkeyPatch
+    ):
+        self._make_adapter_on_chain_ready(monkeypatch)
+        monkeypatch.setattr(
+            backend_module,
+            "validate_vineyard",
+            self._fake_validate_vineyard_with_existing_certificate,
+        )
+
+        payload = {
+            "lat": -33.4942,
+            "lon": -69.2429,
+            "farm_id": "farm-existing-cert",
+            "asset_address": "0x1234567890123456789012345678901234567890",
+            "token_id": 1,
+        }
+        response = api_client.post("/verify-vineyard", json=payload)
+
+        assert response.status_code == 409
+        assert response.json()["detail"]["certificate"]["exists"] is True
+
+    def test_force_recertify_bypasses_certificate_exists_gate(
+        self, api_client: TestClient, backend_module, monkeypatch: pytest.MonkeyPatch
+    ):
+        self._make_adapter_on_chain_ready(monkeypatch)
+        monkeypatch.setattr(
+            backend_module,
+            "validate_vineyard",
+            self._fake_validate_vineyard_with_existing_certificate,
+        )
+
+        payload = {
+            "lat": -33.4942,
+            "lon": -69.2429,
+            "farm_id": "farm-existing-cert-force",
+            "asset_address": "0x1234567890123456789012345678901234567890",
+            "token_id": 1,
+            "force_recertify": True,
+        }
+        response = api_client.post("/verify-vineyard", json=payload)
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "ASSET_CERTIFIED"
 
 
 class TestBackend:

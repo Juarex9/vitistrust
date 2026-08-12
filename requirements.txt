@@ -18,6 +18,9 @@ hiero-sdk-python>=0.2.0
 # Rootstock / EVM (web3; también usado por validation_agent)
 web3>=6.11.0
 
+# Satelital (Google Earth Engine — proveedor primario NDVI/NDMI)
+earthengine-api>=1.4.0
+
 # Utilities
 pydantic>=2.5.0
 pydantic-settings>=2.1.0

@@ -6,6 +6,7 @@ import logging
 from fastapi import APIRouter, Query
 from fastapi.responses import Response
 
+from backend import deps
 from backend.satellite_ops import (
     NDMI_EVALSCRIPT,
     NDVI_EVALSCRIPT,
@@ -17,6 +18,7 @@ from backend.satellite_ops import (
     _get_sentinel_token,
     _resolve_window,
 )
+from backend.satellite_provider import SatelliteNotConfiguredError, SatelliteProviderError
 
 logger = logging.getLogger("vitistrust")
 
@@ -97,8 +99,33 @@ async def satellite_history(
     lon: float = Query(..., description="Longitude"),
     months: int = Query(24, description="Number of months to look back"),
 ) -> dict:
-    """Devuelve el historial NDVI de los últimos N meses."""
-    history = _build_ndvi_history(lat, lon, months)
+    """Devuelve el historial NDVI de los últimos N meses.
+
+    Usa el proveedor satelital activo (GEE si está configurado); si el
+    proveedor no está disponible o falla, cae a un histórico sintético
+    determinista (`source: synthetic_demo`, `demo: true`).
+    """
+    provider = deps.satellite_provider
+    history: list[dict] = []
+    is_real = False
+
+    if provider is not None:
+        try:
+            history = await provider.fetch_history(lat, lon, months)
+            is_real = provider.name == "gee" and bool(history)
+        except (SatelliteNotConfiguredError, SatelliteProviderError) as exc:
+            logger.warning(
+                "Proveedor satelital (%s) no pudo generar histórico, usando sintético: %s",
+                provider.name,
+                exc,
+            )
+        except Exception as exc:
+            logger.error("Error inesperado obteniendo histórico satelital: %s", exc)
+
+    if not history:
+        history = _build_ndvi_history(lat, lon, months)
+        is_real = False
+
     alerts = _evaluate_alerts(history)
 
     return {
@@ -106,6 +133,6 @@ async def satellite_history(
         "alerts": alerts,
         "coordinates": {"lat": lat, "lon": lon},
         "months_analyzed": len(history),
-        "source": "synthetic_demo",
-        "demo": True,
+        "source": "sentinel-2-gee" if is_real else "synthetic_demo",
+        "demo": not is_real,
     }

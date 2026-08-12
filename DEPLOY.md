@@ -70,9 +70,15 @@ HEDERA_ACCOUNT_ID=0.0.xxxxxx
 HEDERA_DER_PRIVATE_KEY=3020...
 HEDERA_TOPIC_ID=0.0.xxxxxx
 
-# ===== SATELLITE (Sentinel Hub) =====
+# ===== SATELLITE (prefer GEE; Sentinel Hub as fallback) =====
+SATELLITE_PROVIDER=auto
+GEE_PROJECT_ID=your-gcp-project
+# GEE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+# GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json
 SENTINEL_CLIENT_ID=...
 SENTINEL_CLIENT_SECRET=...
+ALLOW_UNVERIFIED_CERTIFY=false
+REQUIRE_REAL_SATELLITE=false
 
 # ===== AI (Groq) =====
 AI_API_KEY=...

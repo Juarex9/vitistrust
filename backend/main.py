@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from agents.perception_agent import get_real_indices, get_water_stress_level
+from agents.perception_agent import get_water_stress_level
 from agents.reasoning_agent import SCORE_MODEL_VERSION, analyze_vineyard_health
 from agents.validation_agent import validate_geolocation, validate_vegetation, validate_vineyard
 from backend import deps
@@ -205,7 +205,10 @@ retry_decorator = retry_on_failure()
 
 @retry_decorator
 async def retry_satellite(lat: float, lon: float) -> dict[str, Any]:
-    return get_real_indices(lat, lon)
+    provider = deps.satellite_provider
+    if provider is None:
+        raise RuntimeError("Satellite provider not configured")
+    return await provider.fetch_indices(lat, lon)
 
 
 @retry_decorator
@@ -396,12 +399,45 @@ async def health_check() -> dict[str, Any]:
     return health
 
 
+def _demo_satellite_source_blocked(source: str | None) -> bool:
+    """True si REQUIRE_REAL_SATELLITE=true y la fuente satelital es fallback/demo."""
+    require_real = os.getenv("REQUIRE_REAL_SATELLITE", "false").lower() in {"1", "true", "yes"}
+    if not require_real:
+        return False
+    normalized = (source or "").lower()
+    return "fallback" in normalized or "demo" in normalized
+
+
+def _build_failed_checks(validation_result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Detalle de qué validaciones duras (geo/vegetación) fallaron, para el 422."""
+    failed: list[dict[str, Any]] = []
+    validations = validation_result.get("validations", {})
+    geolocation = validations.get("geolocation") or {}
+    vegetation = validations.get("vegetation") or {}
+    if not geolocation.get("valid"):
+        failed.append({"check": "geolocation", "message": geolocation.get("message", "Geolocation inválida")})
+    if not vegetation.get("valid"):
+        failed.append({"check": "vegetation", "message": vegetation.get("message", "Vegetación inválida")})
+    return failed
+
+
 @app.post("/verify-vineyard")
 async def verify_vineyard(
     request: AuditRequest,
     _: None = Depends(check_verify_rate_limit),
 ) -> AuditResponse:
-    """Audita un viñedo tokenizado."""
+    """Audita un viñedo tokenizado.
+
+    Orden atómico: satelital -> validación (gates duros) -> IA -> imágenes + IPFS
+    -> certificación Rootstock (asset layer) -> notarización Hedera (trust layer).
+
+    Si Rootstock falla, NO se notariza en Hedera (evita dejar un registro de
+    confianza sin activo certificado). Si Hedera falla luego de certificar en
+    Rootstock, la certificación on-chain ya es válida y no se revierte: se
+    responde 200 con `status=ASSET_CERTIFIED_HEDERA_PENDING` y el detalle del
+    error de Hedera, en vez de un 5xx que oculte el `rootstock_tx_hash` ya
+    confirmado.
+    """
     logger.info("Starting audit for farm: %s", request.farm_id)
 
     adapter = deps.rootstock_adapter
@@ -410,6 +446,26 @@ async def verify_vineyard(
             status_code=503,
             detail="Rootstock adapter not available - asset layer unavailable",
         )
+
+    topic_id = os.getenv("HEDERA_TOPIC_ID")
+    if not topic_id:
+        raise HTTPException(status_code=500, detail="HEDERA_TOPIC_ID not configured")
+    if not deps.hedera_node:
+        raise HTTPException(status_code=503, detail="Hedera not configured")
+
+    _stub_asset = "0x0000000000000000000000000000000000000001"
+    if not adapter.is_stub:
+        if not request.asset_address or request.token_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="asset_address and token_id are required when Rootstock is fully configured "
+                "(RSK_RPC_URL, RSK_CONTRACT_ADDRESS, RSK_PRIVATE_KEY)",
+            )
+        asset_for_tx = request.asset_address
+        token_for_tx = request.token_id
+    else:
+        asset_for_tx = request.asset_address or _stub_asset
+        token_for_tx = request.token_id if request.token_id is not None else 0
 
     logger.info("Consulting satellite for %s, %s", request.lat, request.lon)
     satellite_start = time.perf_counter()
@@ -424,6 +480,15 @@ async def verify_vineyard(
     if sat_data["status"] == "error":
         logger.error("Satellite error: %s", sat_data["message"])
         raise HTTPException(status_code=400, detail=sat_data["message"])
+
+    if _demo_satellite_source_blocked(sat_data.get("source")):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "REQUIRE_REAL_SATELLITE=true: no se permite certificar con datos "
+                f"satelitales demo/fallback (source='{sat_data.get('source')}')"
+            ),
+        )
 
     ndvi = float(sat_data.get("ndvi", 0) or 0)
     ndmi = round(float(sat_data.get("ndmi", 0) or 0), 3)
@@ -491,6 +556,7 @@ async def verify_vineyard(
                         "exists": False,
                         "message": "Extended certificate validation unavailable",
                     },
+                    "regional_benchmark": regional_benchmark,
                 },
             }
         validation_result.update(
@@ -521,10 +587,31 @@ async def verify_vineyard(
             validation_result["validations"]["vegetation"]["valid"],
         )
 
+    allow_unverified = os.getenv("ALLOW_UNVERIFIED_CERTIFY", "false").lower() in {"1", "true", "yes"}
+    if not validation_result["can_verify"] and not allow_unverified:
+        logger.warning("Vineyard failed verification gates for farm %s", request.farm_id)
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "El viñedo no pasó las validaciones obligatorias (geolocalización/vegetación)",
+                "failed_checks": _build_failed_checks(validation_result),
+                "validation": validation_result,
+            },
+        )
+
+    certificate_info = validation_result["validations"].get("certificate") or {}
+    if certificate_info.get("exists") and not request.force_recertify:
+        logger.info("Certificate already exists for farm %s, force_recertify=False", request.farm_id)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Ya existe una certificación on-chain para este asset/token. "
+                "Usá force_recertify=true para recertificar.",
+                "certificate": certificate_info,
+            },
+        )
+
     logger.info("AI analyzing vineyard health")
-    satellite_image_task = asyncio.create_task(
-        _get_satellite_image_base64(request.lat, request.lon, ndvi)
-    )
     ai_start = time.perf_counter()
     try:
         verdict = await _execute_with_timeout_and_breaker(
@@ -532,12 +619,14 @@ async def verify_vineyard(
             retry_ai_analysis(sat_data),
         )
     except Exception as exc:
-        satellite_image_task.cancel()
         raise HTTPException(status_code=503, detail=f"AI service error: {exc}") from exc
     LATEST_STAGE_METRICS["ai_ms"] = round((time.perf_counter() - ai_start) * 1000, 2)
 
-    satellite_img = await _get_satellite_image_base64(request.lat, request.lon, ndvi, layer="ndvi")
-    ndmi_img = await _get_satellite_image_base64(request.lat, request.lon, ndvi, layer="ndmi")
+    # Una sola pasada: NDVI + NDMI en paralelo (evita fetchear la misma imagen dos veces).
+    satellite_img, ndmi_img = await asyncio.gather(
+        _get_satellite_image_base64(request.lat, request.lon, ndvi, layer="ndvi"),
+        _get_satellite_image_base64(request.lat, request.lon, ndvi, layer="ndmi"),
+    )
 
     processed_image_bytes, processed_image_mime = _decode_data_uri_image(ndmi_img)
     evidence_payload = _build_evidence_payload(
@@ -561,13 +650,29 @@ async def verify_vineyard(
         logger.error("Evidence upload failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Evidence upload failed: {exc}") from exc
 
-    logger.info("Notarizing in Hedera HCS")
-    topic_id = os.getenv("HEDERA_TOPIC_ID")
-    if not topic_id:
-        raise HTTPException(status_code=500, detail="HEDERA_TOPIC_ID not configured")
-    if not deps.hedera_node:
-        raise HTTPException(status_code=503, detail="Hedera not configured")
+    # Rootstock certifica primero, usando el topic_id estable de Hedera como
+    # referencia (no una txn, que todavía no existe en este punto del flujo).
+    logger.info("Certifying asset on Rootstock (VitisRegistry)")
+    try:
+        rsk_start = time.perf_counter()
+        rootstock_tx_hash = await _execute_with_timeout_and_breaker(
+            "rootstock",
+            adapter.certify_asset(
+                asset_address=asset_for_tx,
+                token_id=token_for_tx,
+                score=int(verdict["score"]),
+                hedera_topic_ref=topic_id,
+                farm_id=request.farm_id,
+            ),
+        )
+        LATEST_STAGE_METRICS["rootstock_ms"] = round((time.perf_counter() - rsk_start) * 1000, 2)
+    except Exception as exc:
+        # Si Rootstock falla, NO notarizamos en Hedera: no hay activo certificado
+        # que respaldar con el registro de confianza.
+        logger.error("Rootstock certify failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Rootstock certify failed: {exc}") from exc
 
+    logger.info("Notarizing in Hedera HCS")
     hedera_start = time.perf_counter()
     hedera_payload = {
         "farm_id": request.farm_id,
@@ -583,19 +688,31 @@ async def verify_vineyard(
         "alerts": _build_alert_evidence(alerts, ndvi),
         "investment_analysis": verdict.get("investment_analysis", {}),
         "metrics": verdict.get("metrics", {}),
+        "rootstock_tx_hash": rootstock_tx_hash,
     }
 
+    hedera_pending = False
     try:
         hedera_result = await _execute_with_timeout_and_breaker(
             "hedera",
             retry_hedera(topic_id, hedera_payload),
         )
+        hedera_status = hedera_result.get("status", "UNKNOWN")
+        hedera_txn_id = hedera_result.get("transaction_id", "")
     except Exception as exc:
-        satellite_image_task.cancel()
-        raise HTTPException(status_code=503, detail=f"Hedera service error: {exc}") from exc
+        # El activo YA quedó certificado en Rootstock (rootstock_tx_hash confirmado).
+        # No hacemos rollback ni devolvemos 5xx (perderíamos la referencia al tx):
+        # respondemos 200 con estado "pendiente de notarización" para que el
+        # certificado on-chain siga siendo recuperable/reintentable.
+        logger.error(
+            "Hedera notarization failed after Rootstock certify (tx=%s): %s",
+            rootstock_tx_hash,
+            exc,
+        )
+        hedera_status = f"ERROR: {exc}"
+        hedera_txn_id = ""
+        hedera_pending = True
     LATEST_STAGE_METRICS["hedera_ms"] = round((time.perf_counter() - hedera_start) * 1000, 2)
-    hedera_status = hedera_result.get("status", "UNKNOWN")
-    hedera_txn_id = hedera_result.get("transaction_id", "")
 
     report_ref = f"/certificate/{request.farm_id}"
     if stress_context["level"] == "critical":
@@ -608,7 +725,11 @@ async def verify_vineyard(
             "ts": datetime.now(timezone.utc).isoformat(),
         }
         logger.warning("Critical NDMI detected, sending Hedera alert for %s", request.farm_id)
-        alert_hedera_status = await retry_hedera(topic_id, alert_payload)
+        try:
+            alert_hedera_status = await retry_hedera(topic_id, alert_payload)
+        except Exception as exc:
+            logger.error("Critical alert notarization failed: %s", exc)
+            alert_hedera_status = {"status": f"ERROR: {exc}"}
         ALERT_HISTORY.setdefault(request.farm_id, []).append(
             {
                 "farm_id": request.farm_id,
@@ -621,43 +742,6 @@ async def verify_vineyard(
             }
         )
 
-    logger.info("Certifying asset on Rootstock (VitisRegistry)")
-
-    hedera_topic_ref = (hedera_txn_id.strip() if hedera_txn_id else "") or topic_id
-    _stub_asset = "0x0000000000000000000000000000000000000001"
-
-    if not adapter.is_stub:
-        if not request.asset_address or request.token_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail="asset_address and token_id are required when Rootstock is fully configured "
-                "(RSK_RPC_URL, RSK_CONTRACT_ADDRESS, RSK_PRIVATE_KEY)",
-            )
-        asset_for_tx = request.asset_address
-        token_for_tx = request.token_id
-    else:
-        asset_for_tx = request.asset_address or _stub_asset
-        token_for_tx = request.token_id if request.token_id is not None else 0
-
-    try:
-        rsk_start = time.perf_counter()
-        rootstock_tx_hash = await _execute_with_timeout_and_breaker(
-            "rootstock",
-            adapter.certify_asset(
-                asset_address=asset_for_tx,
-                token_id=token_for_tx,
-                score=int(verdict["score"]),
-                hedera_topic_ref=hedera_topic_ref,
-                farm_id=request.farm_id,
-            ),
-        )
-        LATEST_STAGE_METRICS["rootstock_ms"] = round((time.perf_counter() - rsk_start) * 1000, 2)
-    except Exception as exc:
-        satellite_image_task.cancel()
-        logger.error("Rootstock certify failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Rootstock certify failed: {exc}") from exc
-
-    satellite_img = await satellite_image_task
     evidence_index = _read_evidence_index()
     evidence_index[request.farm_id] = {
         "farm_id": request.farm_id,
@@ -684,7 +768,7 @@ async def verify_vineyard(
         rootstock_tx_hash=rootstock_tx_hash,
         hedera_txn_id=hedera_txn_id,
         evidence_cid=evidence_upload["evidence_cid"],
-        status="ASSET_CERTIFIED",
+        status="ASSET_CERTIFIED_HEDERA_PENDING" if hedera_pending else "ASSET_CERTIFIED",
         alerts=alerts,
         regional_benchmark=regional_benchmark,
         score_model_version=verdict.get("score_model_version", SCORE_MODEL_VERSION),
@@ -705,14 +789,17 @@ async def verify_vineyard_get(
     farm_id: str,
     asset_address: str | None = None,
     token_id: int | None = None,
+    force_recertify: bool = False,
+    _: None = Depends(check_verify_rate_limit),
 ) -> AuditResponse:
-    """Versión GET del endpoint de verificación."""
+    """Versión GET del endpoint de verificación (mismo rate limit que el POST)."""
     request = AuditRequest(
         lat=lat,
         lon=lon,
         farm_id=farm_id,
         asset_address=asset_address,
         token_id=token_id,
+        force_recertify=force_recertify,
     )
     return await verify_vineyard(request)
 
